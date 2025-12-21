@@ -4,42 +4,42 @@
 **Windows 11 Home + Ubuntu 24.04.x | Secure Boot ON | Dynamic Graphics | Clean storage | Battery/RAM optimized | RTX for AI**
 
 > This is a **cut-paste-ready**, end-to-end playbook you can follow step by step.
-> It includes: **Ventoy (Secure Boot)**, **Windows + WSL + Docker on D:**, **Linux /home dev universe**, **multi-Java + multi-Node + Miniconda**, **Android Studio**, **VS Code**, **Chrome profile/cache placement**, **shared NTFS data lake**, and **root partition growth control**.
+> It includes: **Ventoy (Secure Boot)**, **Windows + WSL + Docker on D:**, **Ubuntu with HWE kernel**, **Linux /home dev universe**, **multi-Java + multi-Node + Miniconda**, **Android Studio**, **VS Code**, **Chrome profile/cache placement + launchers**, **shared NTFS data lake**, **Snap removal/disable**, **battery optimization**, and **root partition growth control**.
 
 ---
 
 ## 0) Your system model (what we’re building)
 
 ### Hardware and constraints
-- CPU: Intel Core Ultra 9 (275HX)  
-- GPU: RTX 5080 16GB (Blackwell)  
-- RAM: 32GB  
-- Storage: 2×1TB NVMe Gen4  
-- Secure Boot: **ON**  
+- CPU: Intel Core Ultra 9 (275HX)
+- GPU: RTX 5080 16GB (Blackwell)
+- RAM: 32GB
+- Storage: 2×1TB NVMe Gen4
+- Secure Boot: **ON**
 - BIOS Graphics Mode: **Dynamic Graphics** (default)
 
 ### Confirmed wiring constraint (critical)
 - **HDMI external display is physically routed to the RTX (dGPU).**
-  - You proved this by switching BIOS to UMA and HDMI stopped working.
+  - Proven: UMA mode breaks HDMI output in Windows.
 - Therefore:
-  - You **cannot fully power off** the RTX when HDMI is connected.
-  - You **can** keep the RTX **idle/low-power** when not training.
+  - You **cannot fully power off** RTX when HDMI is connected.
+  - You **can** keep RTX **idle/low-power** when not training.
 
 ### Storage architecture (authority rules)
 
 **Disk 0 (Windows)**
-- `C:` (200GB): Windows OS + core drivers only  
-- `D:` (550GB): Windows dev authority (**WSL + Docker + repos + tools + caches**)  
-- `E:` (100GB): OneDrive authority (personal/college sync)  
-- `F:` (100GB, NTFS): Shared data lake (**datasets/weights/checkpoints/exports only**)  
+- `C:` (200GB): Windows OS + core drivers only
+- `D:` (550GB): Windows dev authority (**WSL + Docker + repos + tools + caches**)
+- `E:` (100GB): OneDrive authority (personal/college sync)
+- `F:` (100GB, NTFS): Shared data lake (**datasets/weights/checkpoints/exports only**)
 
 **Disk 1 (Linux)**
 - EFI (1GB), `/boot` (1GB), swap (32GB), `/` (200GB), `/home` (~720GB)
 
 **Non-negotiable rule**
-- **Do not store dev environments or repos on `F:`** (NTFS) in Linux.
+- **Do not store dev environments or repos on `F:`** in Linux.
   - `F:` is for big, mostly-static data (datasets/weights/checkpoints).
-- **All dev environments + repos live on:**
+- Dev lives on:
   - Windows: `D:`
   - Linux: `/home`
 
@@ -53,44 +53,33 @@
    - TPM / Intel PTT: **Enabled**
    - Virtualization (VT-x/VT-d): **Enabled** (WSL2/Docker)
    - Secure Boot: **Enabled**
-   - Graphics: **Dynamic Graphics** (keep as default)
+   - Graphics: **Dynamic Graphics** (default)
 
-> Note: UMA gives best battery (RTX off) but kills CUDA and HDMI. Your default is Dynamic; we design around Dynamic.
+> UMA gives best battery but disables CUDA and HDMI. Your default is Dynamic; we design around it.
 
 ---
 
 ## 2) Build a Secure-Boot Ventoy USB (installer + rescue stick)
 
-### 2.1 What to put on the Ventoy stick (recommended)
-
+### 2.1 What to put on the Ventoy stick
 **Required**
-- Windows 11 ISO (x64) — repair tools + reinstall option
-- Ubuntu 24.04.x Desktop ISO (amd64) — install + rescue environment
+- Windows 11 ISO (x64)
+- Ubuntu 24.04.x Desktop ISO (amd64)
 
 **Optional**
-- Rescuezilla ISO — only if you want GUI imaging/clone capability
-
-**Also optional**
-- `TOOLS\Lenovo\BIOS\` folder for keeping Lenovo BIOS updater files (not required for Ventoy)
+- Rescuezilla ISO (only if you want GUI disk imaging)
+- `TOOLS\Lenovo\BIOS\` folder (optional)
 
 ### 2.2 Create Ventoy with Secure Boot support (Windows)
-
-1. Download Ventoy (Windows zip), extract it
+1. Download Ventoy (Windows zip), extract
 2. Run `Ventoy2Disk.exe` as Administrator
-3. Select your USB drive (**triple-check it’s the USB**)
+3. Select USB drive (triple-check)
 4. Enable:
    - `Option → Secure Boot Support` ✅
-   - (If available) `Option → Partition Style → GPT`
-5. Click **Install** (this wipes the USB)
+   - `Option → Partition Style → GPT` (if available)
+5. Install (wipes USB)
 
-Ventoy will auto-create:
-- a small EFI boot partition
-- a large data partition for ISOs  
-No manual partitioning needed.
-
-### 2.3 Copy ISOs (recommended folder layout)
-
-On the large Ventoy partition:
+### 2.3 Copy ISOs
 ```
 
 ISO\Windows\Win11.iso
@@ -99,73 +88,47 @@ TOOLS\Lenovo\BIOS\   (optional)
 
 ````
 
-### 2.4 First boot with Secure Boot ON (one-time enrollment)
-
-1. Reboot → Boot menu (F12)
-2. Choose USB (UEFI)
-3. Ventoy will prompt one-time Secure Boot enrollment (key/hash) → complete it
-4. Test boot:
-   - Ubuntu ISO → reach “Try / Install”
-   - Windows ISO → reach Windows Setup
-
-If both work, Ventoy is done.
+### 2.4 First boot (Secure Boot ON)
+- Boot menu (F12) → USB (UEFI)
+- Enroll Ventoy key once
+- Test boot both ISOs
 
 ---
 
-## 3) Windows 11 Home: keep `C:` clean, move everything heavy to `D:`
+## 3) Windows 11 Home: keep `C:` clean, move heavy to `D:`
 
 ### 3.1 One-time Windows hygiene
+- Windows Update fully
+- Install Lenovo Vantage + Legion Space
+- Daily refresh rate sanity:
+  - Internal: 60/120Hz daily, 240Hz when needed
+  - External HDMI: avoid max refresh unless required
 
-1. Run Windows Update fully
-2. Install Lenovo Vantage + Legion Space (keep them)
-3. Set display refresh for daily use (battery sanity):
-   - Internal: prefer 60/120Hz daily, 240Hz only when needed
-   - External HDMI: keep reasonable (avoid max refresh if not needed)
-
-### 3.2 Disable Fast Startup (mandatory for safe NTFS dual-boot)
-
-Fast Startup can leave NTFS in a hibernated state and cause mount issues in Linux.
-
+### 3.2 Disable Fast Startup (important for NTFS dual-boot)
 - Control Panel → Power Options → “Choose what the power buttons do”
-- “Change settings that are currently unavailable”
 - Disable **Turn on fast startup**
 
-### 3.3 Windows encryption (Device Encryption on Home)
-
-- Settings → Privacy & security → Device encryption
-- If available, enable it and ensure your recovery key is safely stored (Microsoft account).
-
-**Important stability rule**
-- Keep Secure Boot ON consistently once encryption is enabled.
-- Avoid constantly flipping boot settings.
+### 3.3 Windows encryption (Device Encryption)
+- Settings → Privacy & security → Device encryption (if available)
+- Keep Secure Boot ON after enabling
 
 ---
 
 ## 4) Windows Dev Storage Layout (so nothing piles on C:)
-
-Create these folders:
+Create:
 - `D:\dev\repos\`
 - `D:\dev\tools\`
 - `D:\dev\envs\`
 - `D:\dev\cache\`
-- `D:\apps\` (large GUI apps that can be installed/extracted here)
-- `D:\profiles\` (browser profiles)
-
-**Policy**
-- Git repos → `D:\dev\repos`
-- Language toolchains → `D:\dev\tools`
-- Environments → `D:\dev\envs`
-- Caches → `D:\dev\cache`
-- Large apps → `D:\apps`
+- `D:\apps\`
+- `D:\profiles\`
 
 ---
 
 ## 5) Windows: WSL2 + Docker (move to D: and cap RAM)
 
-### 5.1 Cap WSL2 RAM (stops “Windows uses 10GB+”)
-
+### 5.1 Cap WSL2 RAM
 Create: `C:\Users\<you>\.wslconfig`
-
 ```ini
 [wsl2]
 memory=6GB
@@ -179,89 +142,46 @@ Apply:
 wsl --shutdown
 ```
 
-**Tuning**
-
-* Daily: 4–6GB
-* Heavy tasks: 8–10GB temporarily, then reduce again
-
-### 5.2 Move WSL distro storage to D: (export/import)
-
-1. List distros:
+### 5.2 Move WSL distro to D:
 
 ```powershell
 wsl --list --verbose
-```
 
-2. Export distro (example Ubuntu):
-
-```powershell
 mkdir D:\WSL\backup
 wsl --export Ubuntu D:\WSL\backup\Ubuntu.tar
-```
 
-3. Unregister old distro:
-
-```powershell
 wsl --unregister Ubuntu
-```
 
-4. Import to D:
-
-```powershell
 mkdir D:\WSL\Ubuntu
 wsl --import Ubuntu D:\WSL\Ubuntu D:\WSL\backup\Ubuntu.tar --version 2
-```
 
-5. Set default:
-
-```powershell
 wsl --set-default Ubuntu
 ```
 
 ### 5.3 Move Docker Desktop storage to D:
 
-In Docker Desktop:
-
-* Settings → Resources → Advanced
-* Set Disk image location to: `D:\DockerDesktop\`
-* Apply & restart
+Docker Desktop → Settings → Resources → Advanced → Disk image location: `D:\DockerDesktop\` → Apply & Restart
 
 ---
 
 ## 6) Windows Dev Setup (multi-Java, multi-Node, Miniconda, Android Studio, VS Code)
 
-### 6.1 VS Code on Windows: **Portable Mode** (best for C: hygiene)
+### 6.1 VS Code on Windows (Portable Mode)
 
-1. Download VS Code ZIP (not installer)
-2. Extract to: `D:\apps\VSCode\`
-3. Create: `D:\apps\VSCode\data\`
-4. Launch: `D:\apps\VSCode\Code.exe`
+* Extract VS Code ZIP to: `D:\apps\VSCode\`
+* Create: `D:\apps\VSCode\data\`
+* Run: `D:\apps\VSCode\Code.exe`
 
-Now extensions/settings live inside `D:\apps\VSCode\data\` (not in `%APPDATA%` on C:).
+**Pin shortcut**
 
-#### VS Code “desktop icon” / pinned shortcut (Windows)
+* Right-click `Code.exe` → Create shortcut → Pin to taskbar/Start
 
-Create a shortcut to the portable EXE and pin it:
+### 6.2 Multi-Java on Windows (JDK zips on D:)
 
-* Right-click `D:\apps\VSCode\Code.exe` → **Show more options** → **Create shortcut**
-* Move the shortcut to Desktop (optional)
-* Right-click shortcut → **Pin to Start** / **Pin to taskbar**
+* `D:\dev\tools\jdk\jdk-21\`
+* `D:\dev\tools\jdk\jdk-17\`
 
-> This is the Windows equivalent of the Ubuntu `.desktop` launcher.
-
-### 6.2 Multi-Java on Windows (version-safe and D:-resident)
-
-**Recommended approach**
-
-* Download **JDK ZIP** distributions (Temurin/Oracle zip builds)
-* Extract to:
-
-  * `D:\dev\tools\jdk\jdk-21\`
-  * `D:\dev\tools\jdk\jdk-17\`
-  * `D:\dev\tools\jdk\jdk-8\` (only if you truly need it)
-
-**Per-shell switching (no permanent PATH mess)**
-Create PowerShell scripts:
+Switcher scripts:
 
 `D:\dev\tools\scripts\java21.ps1`
 
@@ -279,33 +199,15 @@ $env:Path="$env:JAVA_HOME\bin;$env:Path"
 java -version
 ```
 
-Use:
-
-```powershell
-. D:\dev\tools\scripts\java21.ps1
-```
-
 ### 6.3 Multi-Node on Windows
 
-**Option A (native):** NVM for Windows
+* NVM for Windows storing versions in `D:\dev\tools\nvm\`
+* npm cache: `D:\dev\cache\npm\`
+  (or do Node only in WSL)
 
-* Install NVM for Windows
-* Configure node versions stored on `D:\dev\tools\nvm\`
-* Configure npm cache:
+### 6.4 Miniconda on Windows (everything on D:)
 
-  * `D:\dev\cache\npm\`
-
-**Option B (cleanest isolation):** Node only in WSL
-
-* Use NVM inside WSL and keep Windows lightweight
-
-### 6.4 Miniconda on Windows: everything on D:
-
-Install Miniconda to:
-
-* `D:\dev\tools\miniconda3\`
-
-Configure env + cache locations (Anaconda Prompt):
+Install to: `D:\dev\tools\miniconda3\`
 
 ```bat
 conda config --set auto_activate_base false
@@ -313,66 +215,41 @@ conda config --add envs_dirs D:\dev\envs\conda
 conda config --add pkgs_dirs D:\dev\cache\conda-pkgs
 ```
 
-### 6.5 Android Studio on Windows: ZIP install + SDK/Gradle/AVD on D:
+### 6.5 Android Studio on Windows (ZIP + SDK/Gradle/AVD on D:)
 
-**Install Studio**
+* Studio: `D:\apps\AndroidStudio\`
+* SDK: `D:\dev\envs\Android\Sdk`
 
-1. Download Android Studio ZIP
-2. Extract to: `D:\apps\AndroidStudio\`
-3. Launch: `D:\apps\AndroidStudio\android-studio\bin\studio64.exe`
-
-**During setup wizard**
-
-* Set Android SDK location to:
-
-  * `D:\dev\envs\Android\Sdk`
-
-**Move Gradle cache**
-Set Windows User Environment Variable:
+Env vars:
 
 * `GRADLE_USER_HOME = D:\dev\cache\gradle`
-
-**Move Emulator AVD images**
-Set Windows User Environment Variable:
-
 * `ANDROID_AVD_HOME = D:\dev\envs\Android\.android\avd`
-
-> This prevents silent 20–80GB growth on C: from SDKs, Gradle, and emulators.
 
 ---
 
 ## 7) Windows Chrome: put profile + cache on D:
 
-### 7.1 Create directories
+Create:
 
 * `D:\profiles\Chrome\UserData\`
 * `D:\profiles\Chrome\Cache\`
 
-### 7.2 Create a dedicated Chrome shortcut (recommended)
-
-Target:
+Shortcut target:
 
 ```text
 "C:\Program Files\Google\Chrome\Application\chrome.exe" --user-data-dir="D:\profiles\Chrome\UserData" --disk-cache-dir="D:\profiles\Chrome\Cache"
 ```
 
-This forces:
-
-* profile (extensions/bookmarks/history) → D:
-* disk cache → D:
-
-> Don’t try to share the same Chrome profile between Windows and Linux via F:. Keep separate profiles per OS.
-
 ---
 
-## 8) Ubuntu 24.04.x install (Disk 1) + keep `/` minimal
+## 8) Ubuntu 24.04.x install (Disk 1) + HWE kernel (mandatory for 2025 hardware)
 
-### 8.1 Manual partitioning (your agreed layout)
+### 8.1 Manual partitioning
 
 Disk 1:
 
-* EFI 1GB FAT32 → mount `/boot/efi`
-* /boot 1GB ext4 → mount `/boot`
+* EFI 1GB FAT32 → `/boot/efi`
+* /boot 1GB ext4 → `/boot`
 * swap 32GB
 * `/` 200GB ext4
 * `/home` remaining ext4
@@ -384,17 +261,28 @@ sudo apt update && sudo apt -y upgrade
 sudo apt -y install build-essential git curl wget unzip htop nvme-cli
 ```
 
-### 8.3 NVIDIA driver with Secure Boot ON (MOK flow)
+### 8.3 Upgrade to HWE kernel (required)
 
-Install driver:
+Install HWE stack (Ubuntu 24.04):
+
+```bash
+sudo apt -y install linux-generic-hwe-24.04
+sudo reboot
+```
+
+Verify kernel (should be newer than base GA; typically 6.11+ on 24.04.3+):
+
+```bash
+uname -r
+```
+
+### 8.4 NVIDIA driver with Secure Boot ON (MOK)
 
 ```bash
 sudo ubuntu-drivers devices
 sudo ubuntu-drivers autoinstall
 sudo reboot
 ```
-
-If prompted, complete MOK enrollment on reboot.
 
 Verify:
 
@@ -406,25 +294,13 @@ nvidia-smi
 
 ## 9) Linux shared data lake: mount `F:` NTFS at `/mnt/shared`
 
-### 9.1 Create mount point
-
 ```bash
 sudo mkdir -p /mnt/shared
-```
-
-### 9.2 Find UUID
-
-```bash
 lsblk -f
-```
-
-### 9.3 Add to `/etc/fstab`
-
-```bash
 sudo nano /etc/fstab
 ```
 
-Add (replace UUID):
+Add:
 
 ```fstab
 UUID=XXXX-XXXX  /mnt/shared  ntfs3  defaults,uid=1000,gid=1000,umask=022  0  0
@@ -435,11 +311,6 @@ Apply:
 ```bash
 sudo mount -a
 df -h | grep shared
-```
-
-### 9.4 Create shared structure (AI assets only)
-
-```bash
 mkdir -p /mnt/shared/{datasets,weights,checkpoints,exports,hf,torch}
 ```
 
@@ -454,7 +325,7 @@ mkdir -p ~/dev/{repos,tools,envs,cache,tmp}
 mkdir -p ~/profiles
 ```
 
-### 10.2 Node.js (multi-version) via NVM
+### 10.2 Node (NVM)
 
 ```bash
 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
@@ -463,20 +334,14 @@ nvm install --lts
 nvm install 20
 nvm use --lts
 node -v && npm -v
-```
-
-Redirect npm cache (optional):
-
-```bash
 npm config set cache ~/dev/cache/npm --global
 ```
 
-### 10.3 Java (multi-version) via SDKMAN
+### 10.3 Java (SDKMAN)
 
 ```bash
 curl -s "https://get.sdkman.io" | bash
 source ~/.bashrc
-sdk version
 sdk list java
 sdk install java 21.0.?.tem
 sdk install java 17.0.?.tem
@@ -484,15 +349,10 @@ sdk use java 21.0.?.tem
 java -version
 ```
 
-### 10.4 Miniconda in /home (envs/caches controlled)
-
-Install Miniconda to:
-
-* `~/miniconda3`
-
-Then:
+### 10.4 Miniconda (envs + pkgs on /home)
 
 ```bash
+# install Miniconda to ~/miniconda3, then:
 ~/miniconda3/bin/conda init
 source ~/.bashrc
 conda config --set auto_activate_base false
@@ -500,26 +360,14 @@ conda config --add envs_dirs ~/dev/envs/conda
 conda config --add pkgs_dirs ~/dev/cache/conda-pkgs
 ```
 
-### 10.5 Android Studio on Linux (keep growth in /home, not `/`)
+### 10.5 Android Studio (Linux)
 
-**Install**
-
-1. Download Android Studio (Linux tar.gz)
-2. Extract to:
-
-   * `~/dev/tools/android-studio/` (recommended)
-
-Launch:
+Extract to: `~/dev/tools/android-studio/` and run:
 
 ```bash
 ~/dev/tools/android-studio/android-studio/bin/studio.sh
 ```
 
-**Set SDK location**
-
-* `~/Android/Sdk` (on `/home`, good)
-
-**Move Gradle + AVD**
 Add to `~/.bashrc`:
 
 ```bash
@@ -536,166 +384,151 @@ source ~/.bashrc
 mkdir -p "$GRADLE_USER_HOME" "$ANDROID_AVD_HOME"
 ```
 
-### 10.6 VS Code on Ubuntu: install + optional “clean paths” launcher
-
-#### A) Install VS Code (simple, recommended)
-
-Install via the official `.deb` or your preferred method.
-By default:
-
-* user settings/extensions live under `/home` (safe; won’t bloat `/`)
-* so you’re already aligned with your partition policy
-
-#### B) Optional: force VS Code user-data/extensions into your `~/dev` structure
-
-This is purely for organization (not required), but it makes your setup more “portable” and predictable.
-
-1. Create directories:
+### 10.6 VS Code on Ubuntu: optional “Dev Data” launcher
 
 ```bash
 mkdir -p ~/dev/tools/vscode-data/user-data
 mkdir -p ~/dev/tools/vscode-data/extensions
-```
-
-2. Copy VS Code launcher to your user launchers:
-
-```bash
 mkdir -p ~/.local/share/applications
 cp /usr/share/applications/code.desktop ~/.local/share/applications/code-dev.desktop
-```
-
-3. Edit the copied launcher:
-
-```bash
 nano ~/.local/share/applications/code-dev.desktop
 ```
 
-Change:
-
-* `Name=` to something like:
+Use:
 
 ```ini
 Name=Visual Studio Code (Dev Data)
-```
-
-Find the `Exec=` line (it may include `--unity-launch` and `%F`). Replace it with:
-
-```ini
 Exec=/usr/bin/code --user-data-dir=%h/dev/tools/vscode-data/user-data --extensions-dir=%h/dev/tools/vscode-data/extensions %F
 ```
 
-Save and exit.
-
-4. (Optional) refresh launcher database:
-
-```bash
-update-desktop-database ~/.local/share/applications 2>/dev/null || true
-```
-
-Now you have a normal app launcher that always keeps VS Code’s data in your structured path.
-
-### 10.7 Chrome on Ubuntu: install + profile/cache control with a normal app launcher
-
-#### A) Install Chrome (Ubuntu)
-
-If you downloaded the `.deb`:
-
-```bash
-cd ~/Downloads
-sudo apt install ./google-chrome-stable_current_amd64.deb
-```
-
-Verify install:
-
-```bash
-which google-chrome
-```
-
-#### B) Create target directories (in `/home`, not `/`)
+### 10.7 Chrome on Ubuntu: custom launcher with profile/cache in `/home`
 
 ```bash
 mkdir -p ~/profiles/chrome
 mkdir -p ~/dev/cache/chrome
-```
-
-#### C) Create a custom app launcher (Activities menu shortcut)
-
-Ubuntu stores app launchers here:
-
-* System-wide: `/usr/share/applications/`
-* Your custom launchers: `~/.local/share/applications/` ✅
-
-1. Copy the launcher:
-
-```bash
 mkdir -p ~/.local/share/applications
 cp /usr/share/applications/google-chrome.desktop ~/.local/share/applications/google-chrome-custom.desktop
-```
-
-2. Edit it:
-
-```bash
 nano ~/.local/share/applications/google-chrome-custom.desktop
 ```
 
-* Change the name:
+Use:
 
 ```ini
 Name=Google Chrome (Custom Profile)
-```
-
-* Replace the `Exec=` line with **one** of these (choose the one that matches your system):
-
-If your original `Exec=` uses `google-chrome-stable`:
-
-```ini
 Exec=/usr/bin/google-chrome-stable --user-data-dir=%h/profiles/chrome --disk-cache-dir=%h/dev/cache/chrome %U
 ```
 
-If your original `Exec=` uses `google-chrome`:
+---
 
-```ini
-Exec=/usr/bin/google-chrome --user-data-dir=%h/profiles/chrome --disk-cache-dir=%h/dev/cache/chrome %U
-```
+## 11) Disable Snap on Ubuntu (remove + block reinstall)
 
-3. (Optional) refresh app launcher database:
+> Removing Snap may remove Snap-managed apps. Reinstall alternatives via APT as needed.
+
+### 11.1 Remove snap packages (best-effort)
 
 ```bash
-update-desktop-database ~/.local/share/applications 2>/dev/null || true
+snap list || true
+
+sudo snap remove --purge firefox || true
+sudo snap remove --purge snap-store || true
+sudo snap remove --purge gnome-3-38-2004 || true
+sudo snap remove --purge gtk-common-themes || true
+sudo snap remove --purge bare || true
+sudo snap remove --purge core20 || true
+sudo snap remove --purge core22 || true
+sudo snap remove --purge snapd || true
 ```
 
-#### D) Verify it worked
+### 11.2 Purge snapd + clean directories
 
-Launch **Google Chrome (Custom Profile)** → open:
+```bash
+sudo apt -y purge snapd
+sudo apt -y autoremove --purge
 
-* `chrome://version`
+rm -rf ~/snap
+sudo rm -rf /snap /var/snap /var/lib/snapd /var/cache/snapd
+```
 
-Check **Profile Path** points into:
+### 11.3 Block snapd from reinstall
 
-* `/home/<you>/profiles/chrome/...`
+```bash
+sudo nano /etc/apt/preferences.d/nosnap.pref
+```
 
-> Keep Windows and Linux Chrome profiles separate. Do not try to share one profile via `F:`.
+Paste:
+
+```text
+Package: snapd
+Pin: release a=*
+Pin-Priority: -10
+```
+
+### 11.4 Install replacements (optional)
+
+```bash
+sudo apt update
+sudo apt -y install firefox || true
+```
 
 ---
 
-## 11) Keep Linux `/` (200GB) from growing beyond ~50–60%
+## 12) Battery optimization on Linux (Dynamic Graphics reality)
 
-Your `/` must stay OS-only. Biggest offenders:
+### 12.1 Key reality check
 
-* systemd journal logs
-* APT cache
-* stray large logs under `/var/log`
-* snap/flatpak caches (if used heavily)
+* If HDMI is in use, RTX must stay enabled for display routing.
+* Goal becomes: **minimize RTX usage + keep it idle**, not “off”.
 
-### 11.1 Cap systemd journal size + retention
+### 12.2 Install power + battery tools
 
-Edit:
+```bash
+sudo apt -y install tlp tlp-rdw powertop
+sudo systemctl enable --now tlp
+```
+
+Optional calibration/inspection:
+
+```bash
+sudo powertop --auto-tune
+```
+
+### 12.3 Prefer iGPU for desktop rendering (hybrid behavior)
+
+* On Dynamic Graphics laptops, Ubuntu + NVIDIA drivers generally run hybrid by default.
+* Practical discipline:
+
+  * don’t force GPU acceleration for everything
+  * keep refresh rates sane
+  * launch heavy AI only when needed
+
+### 12.4 Use power profiles
+
+Ubuntu supports power profiles:
+
+```bash
+powerprofilesctl get
+powerprofilesctl set power-saver
+# when training:
+powerprofilesctl set performance
+```
+
+### 12.5 Optional: limit background GPU wakeups
+
+* Avoid always-on GPU apps (electron apps with GPU acceleration, etc.)
+* Don’t keep training notebooks running when not training
+* Consider disabling “continue running background apps” for Chrome if you notice GPU wakeups
+
+---
+
+## 13) Keep Linux `/` (200GB) from growing beyond ~50–60%
+
+### 13.1 Cap systemd journal size + retention
 
 ```bash
 sudo nano /etc/systemd/journald.conf
 ```
 
-Recommended:
+Use:
 
 ```ini
 [Journal]
@@ -713,9 +546,7 @@ sudo systemctl restart systemd-journald
 journalctl --disk-usage
 ```
 
-### 11.2 Weekly journald vacuum (systemd timer)
-
-Script:
+### 13.2 Weekly journald vacuum (systemd timer)
 
 ```bash
 sudo nano /usr/local/sbin/journal-vacuum.sh
@@ -730,11 +561,6 @@ set -euo pipefail
 
 ```bash
 sudo chmod +x /usr/local/sbin/journal-vacuum.sh
-```
-
-Service:
-
-```bash
 sudo nano /etc/systemd/system/journal-vacuum.service
 ```
 
@@ -746,8 +572,6 @@ Description=Vacuum systemd journal logs
 Type=oneshot
 ExecStart=/usr/local/sbin/journal-vacuum.sh
 ```
-
-Timer:
 
 ```bash
 sudo nano /etc/systemd/system/journal-vacuum.timer
@@ -772,9 +596,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now journal-vacuum.timer
 ```
 
-### 11.3 Monthly APT cache clean (systemd timer)
-
-Service:
+### 13.3 Monthly APT cache clean (systemd timer)
 
 ```bash
 sudo nano /etc/systemd/system/apt-clean.service
@@ -788,8 +610,6 @@ Description=Clean apt cache
 Type=oneshot
 ExecStart=/usr/bin/apt-get clean
 ```
-
-Timer:
 
 ```bash
 sudo nano /etc/systemd/system/apt-clean.timer
@@ -814,46 +634,18 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now apt-clean.timer
 ```
 
-### 11.4 Root usage quick check (habit)
-
-Run monthly:
-
-```bash
-df -h /
-sudo du -xh /var | sort -h | tail -n 30
-```
-
 ---
 
-## 12) RTX “AI-only” behavior: realistic optimization on this hardware
+## 14) AI data + cache policy (prevents silent bloat)
 
-### Windows: force most apps to iGPU (saves power)
-
-* Settings → System → Display → Graphics
-
-  * Set Chrome, VS Code, etc. → **Power saving (iGPU)**
-  * Set training apps (Python, CUDA tools) → **High performance (NVIDIA)**
-
-### Linux: keep RTX idle unless training
-
-Because HDMI needs RTX when connected, the best approach is:
-
-* avoid unnecessary GPU-accelerated heavy apps
-* keep refresh rates sane
-* run training/inference intentionally (not constantly “open”)
-
----
-
-## 13) AI data + cache policy (prevents silent bloat)
-
-### 13.1 Put AI assets on shared lake (F: → /mnt/shared)
+### 14.1 Put AI assets on shared lake (F: → /mnt/shared)
 
 * datasets → `/mnt/shared/datasets`
 * weights → `/mnt/shared/weights`
 * checkpoints → `/mnt/shared/checkpoints`
 * exports → `/mnt/shared/exports`
 
-### 13.2 Redirect ML caches to `/mnt/shared` (Linux)
+### 14.2 Redirect ML caches to `/mnt/shared` (Linux)
 
 Add to `~/.bashrc`:
 
@@ -872,30 +664,22 @@ source ~/.bashrc
 
 ---
 
-## 14) Backup + fast recovery strategy (practical)
+## 15) Backup + fast recovery strategy (practical)
 
-### 14.1 Cloud baseline
+### 15.1 Cloud baseline
 
-* Code: GitHub (all repos)
+* Code: GitHub (repos)
 * Docs: OneDrive (E:)
-* Important exports/results: OneDrive or `/mnt/shared/exports` (selectively sync)
+* Important exports: OneDrive or `/mnt/shared/exports`
 
-### 14.2 Windows recovery
+### 15.2 Windows recovery
 
-* Keep Hasleo images occasionally (before major changes)
-* Keep Ventoy Windows ISO for repair boot
+* Hasleo images before major changes
+* Ventoy Windows ISO for repair boot
 
-### 14.3 Linux recovery
+### 15.3 Linux recovery
 
-Best student-friendly method:
-
-* keep your Linux dev state reproducible:
-
-  * `~/dev/repos` is git
-  * `conda env export` for critical envs
-  * a small “bootstrap script” repo (`machine-setup`)
-
-Helpful exports:
+Keep setup reproducible:
 
 ```bash
 conda env export > ~/dev/repos/<your-setup-repo>/env.yml
@@ -904,22 +688,25 @@ pip freeze > ~/dev/repos/<your-setup-repo>/requirements.txt
 
 ---
 
-## 15) Validation checklist (run these to confirm you’re “done”)
+## 16) Validation checklist
 
-### Windows checks
+### Windows
 
-* `C:` free space stays high (OS only)
-* WSL memory does not balloon:
+* `C:` stays mostly empty (OS only)
+* WSL RAM stable at idle
+* WSL + Docker on `D:`
+* Chrome profile/cache on `D:`
+* Android SDK/AVD/Gradle on `D:`
+* VS Code portable data in `D:\apps\VSCode\data\`
 
-  * Task Manager → Memory stable at idle
-* WSL + Docker storage paths are on `D:`
-* Chrome profile is on `D:\profiles\...`
-* Android SDK/AVD/Gradle caches are on D:
-* VS Code data is inside `D:\apps\VSCode\data\`
+### Linux
 
-### Linux checks
+* Kernel is HWE:
 
-* `/` usage stays < 60%:
+  ```bash
+  uname -r
+  ```
+* `/` stays < 60%:
 
   ```bash
   df -h /
@@ -934,28 +721,28 @@ pip freeze > ~/dev/repos/<your-setup-repo>/requirements.txt
   ```bash
   nvidia-smi
   ```
-* caches redirected:
+* Snap is gone:
 
   ```bash
-  echo $HF_HOME
-  echo $TORCH_HOME
+  snap --version || echo "snap removed"
   ```
-* Chrome custom launcher works:
+* Power profile works:
 
-  * `chrome://version` → Profile Path under `~/profiles/chrome`
+  ```bash
+  powerprofilesctl get
+  ```
 
 ---
 
 # Quick execution order (recommended)
 
-1. Build Ventoy (Secure Boot) and test boot Windows + Ubuntu ISO
+1. Build Ventoy (Secure Boot) → test boot Windows + Ubuntu ISO
 2. Windows: `.wslconfig` cap → move WSL to D → move Docker to D
 3. Windows: VS Code portable → Miniconda to D → Android Studio ZIP to D → set SDK/Gradle/AVD env vars → Chrome profile to D
-4. Ubuntu: install → NVIDIA driver + MOK → mount `/mnt/shared` → set journald + timers
-5. Ubuntu: NVM + SDKMAN + Miniconda + Android Studio + VS Code (optional custom launcher) + Chrome custom launcher → redirect AI caches to `/mnt/shared`
-6. Validate disk usage and GPU behavior
+4. Ubuntu: install → upgrade to HWE kernel → NVIDIA driver + MOK → mount `/mnt/shared`
+5. Ubuntu: (optional) remove/disable Snap → NVM + SDKMAN + Miniconda + Android Studio + VS Code launcher + Chrome launcher → redirect AI caches to `/mnt/shared`
+6. Battery tuning (TLP + powerprofiles) → journald + timers → validate
 
 ---
 
-::contentReference[oaicite:0]{index=0}
-```
+

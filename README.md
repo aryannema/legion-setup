@@ -1,7 +1,6 @@
 # legion-setup
 
 # Legion Pro 7i (Gen 10, 2025) Dual-Boot AI Workstation Playbook
-
 **Windows 11 Home + Ubuntu 24.04.x | Secure Boot ON | Dynamic Graphics | Clean storage | Battery/RAM optimized | RTX for AI**
 
 > This is a **cut-paste-ready**, end-to-end playbook you can follow step by step.
@@ -12,46 +11,37 @@
 ## 0) Your system model (what we’re building)
 
 ### Hardware and constraints
-
-* CPU: Intel Core Ultra 9 (275HX)
-* GPU: RTX 5080 16GB (Blackwell)
-* RAM: 32GB
-* Storage: 2×1TB NVMe Gen4
-* Secure Boot: **ON**
-* BIOS Graphics Mode: **Dynamic Graphics** (you want this as the default)
+- CPU: Intel Core Ultra 9 (275HX)  
+- GPU: RTX 5080 16GB (Blackwell)  
+- RAM: 32GB  
+- Storage: 2×1TB NVMe Gen4  
+- Secure Boot: **ON**  
+- BIOS Graphics Mode: **Dynamic Graphics** (default)
 
 ### Confirmed wiring constraint (critical)
-
-* **HDMI external display is physically routed to the RTX (dGPU).**
-
-  * You proved this by switching BIOS to UMA and HDMI stopped working.
-* Therefore:
-
-  * You **cannot fully power off** the RTX when HDMI is connected.
-  * You **can** still keep the RTX **idle/low-power** when not training.
+- **HDMI external display is physically routed to the RTX (dGPU).**
+  - You proved this by switching BIOS to UMA and HDMI stopped working.
+- Therefore:
+  - You **cannot fully power off** the RTX when HDMI is connected.
+  - You **can** keep the RTX **idle/low-power** when not training.
 
 ### Storage architecture (authority rules)
 
 **Disk 0 (Windows)**
-
-* `C:` (200GB): Windows OS + core drivers only
-* `D:` (550GB): Windows dev authority (WSL + Docker + repos + tools + caches)
-* `E:` (100GB): OneDrive authority (personal/college sync)
-* `F:` (100GB, NTFS): Shared data lake (datasets/weights/checkpoints/exports only)
+- `C:` (200GB): Windows OS + core drivers only  
+- `D:` (550GB): Windows dev authority (**WSL + Docker + repos + tools + caches**)  
+- `E:` (100GB): OneDrive authority (personal/college sync)  
+- `F:` (100GB, NTFS): Shared data lake (**datasets/weights/checkpoints/exports only**)  
 
 **Disk 1 (Linux)**
-
-* EFI (1GB), `/boot` (1GB), swap (32GB), `/` (200GB), `/home` (~720GB)
+- EFI (1GB), `/boot` (1GB), swap (32GB), `/` (200GB), `/home` (~720GB)
 
 **Non-negotiable rule**
-
-* **Do not store dev environments or repos on `F:`** (NTFS) in Linux.
-
-  * `F:` is for big, mostly-static data (datasets/weights/checkpoints).
-* **All dev environments + repos live on:**
-
-  * Windows: `D:`
-  * Linux: `/home`
+- **Do not store dev environments or repos on `F:`** (NTFS) in Linux.
+  - `F:` is for big, mostly-static data (datasets/weights/checkpoints).
+- **All dev environments + repos live on:**
+  - Windows: `D:`
+  - Linux: `/home`
 
 ---
 
@@ -59,33 +49,29 @@
 
 1. Boot BIOS (F2 / Fn+F2)
 2. Ensure:
+   - Boot Mode: **UEFI**
+   - TPM / Intel PTT: **Enabled**
+   - Virtualization (VT-x/VT-d): **Enabled** (WSL2/Docker)
+   - Secure Boot: **Enabled**
+   - Graphics: **Dynamic Graphics** (keep as default)
 
-   * Boot Mode: **UEFI**
-   * TPM / Intel PTT: **Enabled**
-   * Virtualization (VT-x/VT-d): **Enabled** (WSL2/Docker)
-   * Secure Boot: **Enabled**
-   * Graphics: **Dynamic Graphics** (keep this as your default)
-
-> Optional note: If you ever want maximum battery while laptop-only, UMA is great — but UMA disables RTX (no CUDA) and HDMI won’t work. Your requested default is Dynamic, so we design around Dynamic.
+> Note: UMA gives best battery (RTX off) but kills CUDA and HDMI. Your default is Dynamic; we design around Dynamic.
 
 ---
 
-## 2) Build a Secure-Boot Ventoy USB (your installer + rescue stick)
+## 2) Build a Secure-Boot Ventoy USB (installer + rescue stick)
 
 ### 2.1 What to put on the Ventoy stick (recommended)
 
 **Required**
-
-* Windows 11 ISO (x64) — repair tools + reinstall option
-* Ubuntu 24.04.x Desktop ISO (amd64) — install + rescue environment
+- Windows 11 ISO (x64) — repair tools + reinstall option
+- Ubuntu 24.04.x Desktop ISO (amd64) — install + rescue environment
 
 **Optional**
-
-* Rescuezilla ISO — only if you want GUI imaging/clone capability
+- Rescuezilla ISO — only if you want GUI imaging/clone capability
 
 **Also optional**
-
-* `TOOLS\Lenovo\BIOS\` folder for keeping Lenovo BIOS updater files (not required for Ventoy)
+- `TOOLS\Lenovo\BIOS\` folder for keeping Lenovo BIOS updater files (not required for Ventoy)
 
 ### 2.2 Create Ventoy with Secure Boot support (Windows)
 
@@ -93,26 +79,25 @@
 2. Run `Ventoy2Disk.exe` as Administrator
 3. Select your USB drive (**triple-check it’s the USB**)
 4. Enable:
-
-   * `Option → Secure Boot Support` ✅
-   * (If available) `Option → Partition Style → GPT`
+   - `Option → Secure Boot Support` ✅
+   - (If available) `Option → Partition Style → GPT`
 5. Click **Install** (this wipes the USB)
 
 Ventoy will auto-create:
-
-* a small EFI boot partition
-* a large data partition for ISOs
-  No manual partitioning needed.
+- a small EFI boot partition
+- a large data partition for ISOs  
+No manual partitioning needed.
 
 ### 2.3 Copy ISOs (recommended folder layout)
 
 On the large Ventoy partition:
-
 ```
+
 ISO\Windows\Win11.iso
 ISO\Linux\Ubuntu_24.04.iso
 TOOLS\Lenovo\BIOS\   (optional)
-```
+
+````
 
 ### 2.4 First boot with Secure Boot ON (one-time enrollment)
 
@@ -120,9 +105,8 @@ TOOLS\Lenovo\BIOS\   (optional)
 2. Choose USB (UEFI)
 3. Ventoy will prompt one-time Secure Boot enrollment (key/hash) → complete it
 4. Test boot:
-
-   * Ubuntu ISO → reach “Try / Install”
-   * Windows ISO → reach Windows Setup
+   - Ubuntu ISO → reach “Try / Install”
+   - Windows ISO → reach Windows Setup
 
 If both work, Ventoy is done.
 
@@ -135,48 +119,44 @@ If both work, Ventoy is done.
 1. Run Windows Update fully
 2. Install Lenovo Vantage + Legion Space (keep them)
 3. Set display refresh for daily use (battery sanity):
-
-   * Internal: prefer 60/120Hz daily, 240Hz only when needed
-   * External HDMI: keep reasonable (avoid max refresh if not needed)
+   - Internal: prefer 60/120Hz daily, 240Hz only when needed
+   - External HDMI: keep reasonable (avoid max refresh if not needed)
 
 ### 3.2 Disable Fast Startup (mandatory for safe NTFS dual-boot)
 
 Fast Startup can leave NTFS in a hibernated state and cause mount issues in Linux.
 
-* Control Panel → Power Options → “Choose what the power buttons do”
-* “Change settings that are currently unavailable”
-* Disable **Turn on fast startup**
+- Control Panel → Power Options → “Choose what the power buttons do”
+- “Change settings that are currently unavailable”
+- Disable **Turn on fast startup**
 
 ### 3.3 Windows encryption (Device Encryption on Home)
 
-* Settings → Privacy & security → Device encryption
-* If available, enable it and ensure your recovery key is safely stored (Microsoft account).
+- Settings → Privacy & security → Device encryption
+- If available, enable it and ensure your recovery key is safely stored (Microsoft account).
 
 **Important stability rule**
-
-* Keep Secure Boot ON consistently once encryption is enabled.
-* Avoid constantly flipping boot settings.
+- Keep Secure Boot ON consistently once encryption is enabled.
+- Avoid constantly flipping boot settings.
 
 ---
 
 ## 4) Windows Dev Storage Layout (so nothing piles on C:)
 
 Create these folders:
-
-* `D:\dev\repos\`
-* `D:\dev\tools\`
-* `D:\dev\envs\`
-* `D:\dev\cache\`
-* `D:\apps\` (large GUI apps that can be installed/extracted here)
-* `D:\profiles\` (browser profiles)
+- `D:\dev\repos\`
+- `D:\dev\tools\`
+- `D:\dev\envs\`
+- `D:\dev\cache\`
+- `D:\apps\` (large GUI apps that can be installed/extracted here)
+- `D:\profiles\` (browser profiles)
 
 **Policy**
-
-* Git repos → `D:\dev\repos`
-* Language toolchains → `D:\dev\tools`
-* Environments → `D:\dev\envs`
-* Caches → `D:\dev\cache`
-* Large apps → `D:\apps`
+- Git repos → `D:\dev\repos`
+- Language toolchains → `D:\dev\tools`
+- Environments → `D:\dev\envs`
+- Caches → `D:\dev\cache`
+- Large apps → `D:\apps`
 
 ---
 
@@ -191,7 +171,7 @@ Create: `C:\Users\<you>\.wslconfig`
 memory=6GB
 processors=6
 swap=4GB
-```
+````
 
 Apply:
 
@@ -259,6 +239,16 @@ In Docker Desktop:
 
 Now extensions/settings live inside `D:\apps\VSCode\data\` (not in `%APPDATA%` on C:).
 
+#### VS Code “desktop icon” / pinned shortcut (Windows)
+
+Create a shortcut to the portable EXE and pin it:
+
+* Right-click `D:\apps\VSCode\Code.exe` → **Show more options** → **Create shortcut**
+* Move the shortcut to Desktop (optional)
+* Right-click shortcut → **Pin to Start** / **Pin to taskbar**
+
+> This is the Windows equivalent of the Ubuntu `.desktop` launcher.
+
 ### 6.2 Multi-Java on Windows (version-safe and D:-resident)
 
 **Recommended approach**
@@ -315,8 +305,7 @@ Install Miniconda to:
 
 * `D:\dev\tools\miniconda3\`
 
-Configure env + cache locations:
-Open Anaconda Prompt:
+Configure env + cache locations (Anaconda Prompt):
 
 ```bat
 conda config --set auto_activate_base false
@@ -465,22 +454,6 @@ mkdir -p ~/dev/{repos,tools,envs,cache,tmp}
 mkdir -p ~/profiles
 ```
 
-Repos:
-
-* `~/dev/repos`
-
-Tools:
-
-* `~/dev/tools`
-
-Envs:
-
-* `~/dev/envs`
-
-Caches:
-
-* `~/dev/cache`
-
 ### 10.2 Node.js (multi-version) via NVM
 
 ```bash
@@ -544,7 +517,7 @@ Launch:
 
 **Set SDK location**
 
-* `~/Android/Sdk` (this is on `/home`, good)
+* `~/Android/Sdk` (on `/home`, good)
 
 **Move Gradle + AVD**
 Add to `~/.bashrc`:
@@ -563,40 +536,151 @@ source ~/.bashrc
 mkdir -p "$GRADLE_USER_HOME" "$ANDROID_AVD_HOME"
 ```
 
-### 10.6 VS Code on Linux (safe by default)
+### 10.6 VS Code on Ubuntu: install + optional “clean paths” launcher
 
-Linux VS Code data lives in `/home` already, so it won’t bloat `/`.
+#### A) Install VS Code (simple, recommended)
 
-Recommended install route:
+Install via the official `.deb` or your preferred method.
+By default:
 
-* Install via official `.deb` or via your preferred package method
+* user settings/extensions live under `/home` (safe; won’t bloat `/`)
+* so you’re already aligned with your partition policy
 
-### 10.7 Chrome on Linux: install + profile/cache control
+#### B) Optional: force VS Code user-data/extensions into your `~/dev` structure
 
-**Simple approach (recommended)**
+This is purely for organization (not required), but it makes your setup more “portable” and predictable.
 
-* Install Chrome normally
-* Default profile location is under `/home` (safe)
+1. Create directories:
 
-**Optional: relocate profile/cache**
-Create:
+```bash
+mkdir -p ~/dev/tools/vscode-data/user-data
+mkdir -p ~/dev/tools/vscode-data/extensions
+```
+
+2. Copy VS Code launcher to your user launchers:
+
+```bash
+mkdir -p ~/.local/share/applications
+cp /usr/share/applications/code.desktop ~/.local/share/applications/code-dev.desktop
+```
+
+3. Edit the copied launcher:
+
+```bash
+nano ~/.local/share/applications/code-dev.desktop
+```
+
+Change:
+
+* `Name=` to something like:
+
+```ini
+Name=Visual Studio Code (Dev Data)
+```
+
+Find the `Exec=` line (it may include `--unity-launch` and `%F`). Replace it with:
+
+```ini
+Exec=/usr/bin/code --user-data-dir=%h/dev/tools/vscode-data/user-data --extensions-dir=%h/dev/tools/vscode-data/extensions %F
+```
+
+Save and exit.
+
+4. (Optional) refresh launcher database:
+
+```bash
+update-desktop-database ~/.local/share/applications 2>/dev/null || true
+```
+
+Now you have a normal app launcher that always keeps VS Code’s data in your structured path.
+
+### 10.7 Chrome on Ubuntu: install + profile/cache control with a normal app launcher
+
+#### A) Install Chrome (Ubuntu)
+
+If you downloaded the `.deb`:
+
+```bash
+cd ~/Downloads
+sudo apt install ./google-chrome-stable_current_amd64.deb
+```
+
+Verify install:
+
+```bash
+which google-chrome
+```
+
+#### B) Create target directories (in `/home`, not `/`)
 
 ```bash
 mkdir -p ~/profiles/chrome
 mkdir -p ~/dev/cache/chrome
 ```
 
-Launch Chrome with:
+#### C) Create a custom app launcher (Activities menu shortcut)
+
+Ubuntu stores app launchers here:
+
+* System-wide: `/usr/share/applications/`
+* Your custom launchers: `~/.local/share/applications/` ✅
+
+1. Copy the launcher:
 
 ```bash
-google-chrome --user-data-dir="$HOME/profiles/chrome" --disk-cache-dir="$HOME/dev/cache/chrome"
+mkdir -p ~/.local/share/applications
+cp /usr/share/applications/google-chrome.desktop ~/.local/share/applications/google-chrome-custom.desktop
 ```
+
+2. Edit it:
+
+```bash
+nano ~/.local/share/applications/google-chrome-custom.desktop
+```
+
+* Change the name:
+
+```ini
+Name=Google Chrome (Custom Profile)
+```
+
+* Replace the `Exec=` line with **one** of these (choose the one that matches your system):
+
+If your original `Exec=` uses `google-chrome-stable`:
+
+```ini
+Exec=/usr/bin/google-chrome-stable --user-data-dir=%h/profiles/chrome --disk-cache-dir=%h/dev/cache/chrome %U
+```
+
+If your original `Exec=` uses `google-chrome`:
+
+```ini
+Exec=/usr/bin/google-chrome --user-data-dir=%h/profiles/chrome --disk-cache-dir=%h/dev/cache/chrome %U
+```
+
+3. (Optional) refresh app launcher database:
+
+```bash
+update-desktop-database ~/.local/share/applications 2>/dev/null || true
+```
+
+#### D) Verify it worked
+
+Launch **Google Chrome (Custom Profile)** → open:
+
+* `chrome://version`
+
+Check **Profile Path** points into:
+
+* `/home/<you>/profiles/chrome/...`
+
+> Keep Windows and Linux Chrome profiles separate. Do not try to share one profile via `F:`.
 
 ---
 
 ## 11) Keep Linux `/` (200GB) from growing beyond ~50–60%
 
-Your `/` must stay OS-only. The biggest offenders:
+Your `/` must stay OS-only. Biggest offenders:
 
 * systemd journal logs
 * APT cache
@@ -811,7 +895,7 @@ Best student-friendly method:
   * `conda env export` for critical envs
   * a small “bootstrap script” repo (`machine-setup`)
 
-**Helpful exports**
+Helpful exports:
 
 ```bash
 conda env export > ~/dev/repos/<your-setup-repo>/env.yml
@@ -831,6 +915,7 @@ pip freeze > ~/dev/repos/<your-setup-repo>/requirements.txt
 * WSL + Docker storage paths are on `D:`
 * Chrome profile is on `D:\profiles\...`
 * Android SDK/AVD/Gradle caches are on D:
+* VS Code data is inside `D:\apps\VSCode\data\`
 
 ### Linux checks
 
@@ -855,6 +940,9 @@ pip freeze > ~/dev/repos/<your-setup-repo>/requirements.txt
   echo $HF_HOME
   echo $TORCH_HOME
   ```
+* Chrome custom launcher works:
+
+  * `chrome://version` → Profile Path under `~/profiles/chrome`
 
 ---
 
@@ -862,13 +950,12 @@ pip freeze > ~/dev/repos/<your-setup-repo>/requirements.txt
 
 1. Build Ventoy (Secure Boot) and test boot Windows + Ubuntu ISO
 2. Windows: `.wslconfig` cap → move WSL to D → move Docker to D
-3. Windows: install VS Code portable → Miniconda to D → Android Studio ZIP to D → set SDK/Gradle/AVD env vars → Chrome profile to D
+3. Windows: VS Code portable → Miniconda to D → Android Studio ZIP to D → set SDK/Gradle/AVD env vars → Chrome profile to D
 4. Ubuntu: install → NVIDIA driver + MOK → mount `/mnt/shared` → set journald + timers
-5. Ubuntu: NVM + SDKMAN + Miniconda + Android Studio + Chrome profile strategy → redirect AI caches to `/mnt/shared`
+5. Ubuntu: NVM + SDKMAN + Miniconda + Android Studio + VS Code (optional custom launcher) + Chrome custom launcher → redirect AI caches to `/mnt/shared`
 6. Validate disk usage and GPU behavior
 
 ---
 
-## If you want, I can also generate a “1-page checklist version”
-
-Same content, but compressed into a punch-list you can follow during setup day without scrolling.
+::contentReference[oaicite:0]{index=0}
+```

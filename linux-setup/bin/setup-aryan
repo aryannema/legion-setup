@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ==============================================================================
+# setup-aryan
+#
+# Purpose:
+#   Wrapper runner for staged Linux actions.
+#
+# Prerequisites:
+#   - Staged via: linux-setup/stage-aryan-setup.sh
+#   - bash
+#
+# Usage:
+#   setup-aryan list
+#   setup-aryan <action> [-- <action-args...>]
+#   setup-aryan --help
+#
+# Logging:
+#   - Writes to /var/log/setup-aryan/<action>.log
+#   - Format: "<TZ dd-mm-yyyy HH:MM:ss> <LEVEL> <message>"
+# ==============================================================================
+
+TZ_NAME="Asia/Kolkata"
+ROOT="/usr/local/aryan-setup"
+ACTIONS_DIR="${ROOT}/actions"
+LOG_DIR="/var/log/setup-aryan"
+STATE_DIR="${LOG_DIR}/state-files"
+
+ts() { TZ="${TZ_NAME}" date "+%Z %d-%m-%Y %H:%M:%S"; }
+log_line() { local lvl="$1"; shift; echo "$(ts) ${lvl} $*"; }
+
+print_help() {
+  cat <<EOF
+setup-aryan
+
+Usage:
+  setup-aryan list
+  setup-aryan <action> [-- <args...>]
+  setup-aryan --help
+
+Notes:
+  - Actions are discovered from: ${ACTIONS_DIR}
+  - Logs are written to: ${LOG_DIR}/<action>.log
+
+EOF
+}
+
+ensure_dirs() {
+  sudo -n true 2>/dev/null || true
+  if [[ ! -d "${LOG_DIR}" ]]; then
+    sudo mkdir -p "${LOG_DIR}" || true
+  fi
+  if [[ ! -d "${STATE_DIR}" ]]; then
+    sudo mkdir -p "${STATE_DIR}" || true
+  fi
+}
+
+list_actions() {
+  if [[ ! -d "${ACTIONS_DIR}" ]]; then
+    echo "No actions directory found: ${ACTIONS_DIR}"
+    exit 1
+  fi
+  find "${ACTIONS_DIR}" -maxdepth 1 -type f -name "*.sh" -printf "%f\n" \
+    | sed 's/\.sh$//' \
+    | sort
+}
+
+run_action() {
+  local action="$1"; shift || true
+  local action_path="${ACTIONS_DIR}/${action}.sh"
+  local log_path="${LOG_DIR}/${action}.log"
+
+  if [[ ! -f "${action_path}" ]]; then
+    echo "Unknown action: ${action}"
+    echo "Try: setup-aryan list"
+    exit 2
+  fi
+
+  ensure_dirs
+
+  {
+    log_line "INFO" "setup-aryan: action=${action} user=$(id -un) uid=$(id -u) pwd=$(pwd)"
+    log_line "INFO" "setup-aryan: action_path=${action_path}"
+    log_line "INFO" "setup-aryan: log_path=${log_path}"
+    echo
+    bash "${action_path}" "$@"
+    echo
+    log_line "INFO" "setup-aryan: action=${action} finished rc=$?"
+  } 2>&1 | tee -a "${log_path}"
+}
+
+main() {
+  local cmd="${1:-}"
+  if [[ -z "${cmd}" || "${cmd}" == "-h" || "${cmd}" == "--help" ]]; then
+    print_help
+    exit 0
+  fi
+
+  if [[ "${cmd}" == "list" ]]; then
+    list_actions
+    exit 0
+  fi
+
+  shift || true
+  # Allow a literal "--" separator
+  if [[ "${1:-}" == "--" ]]; then
+    shift || true
+  fi
+
+  run_action "${cmd}" "$@"
+}
+
+main "$@"

@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ==============================================================================
+# setup-aryan-log
+#
+# Purpose:
+#   View logs for a staged action.
+#
+# Prerequisites:
+#   - setup-aryan staged on system
+#
+# Usage:
+#   setup-aryan-log list
+#   setup-aryan-log <action>
+#   setup-aryan-log <action> --follow
+#   setup-aryan-log --help
+# ==============================================================================
+
+LOG_DIR="/var/log/setup-aryan"
+
+print_help() {
+  cat <<EOF
+setup-aryan-log
+
+Usage:
+  setup-aryan-log list
+  setup-aryan-log <action>
+  setup-aryan-log <action> --follow
+
+EOF
+}
+
+list_logs() {
+  if [[ ! -d "${LOG_DIR}" ]]; then
+    echo "No log directory: ${LOG_DIR}"
+    exit 0
+  fi
+  find "${LOG_DIR}" -maxdepth 1 -type f -name "*.log" -printf "%f\n" | sort
+}
+
+show_log() {
+  local action="$1"
+  local follow="${2:-}"
+  local path="${LOG_DIR}/${action}.log"
+
+  if [[ ! -f "${path}" ]]; then
+    echo "No log found: ${path}"
+    echo "Try: setup-aryan-log list"
+    exit 2
+  fi
+
+  if [[ "${follow}" == "--follow" || "${follow}" == "-f" ]]; then
+    tail -n 200 -f "${path}"
+  else
+    tail -n 200 "${path}"
+  fi
+}
+
+main() {
+  local cmd="${1:-}"
+  if [[ -z "${cmd}" || "${cmd}" == "-h" || "${cmd}" == "--help" ]]; then
+    print_help
+    exit 0
+  fi
+
+  if [[ "${cmd}" == "list" ]]; then
+    list_logs
+    exit 0
+  fi
+
+  local action="${cmd}"
+  local follow="${2:-}"
+  show_log "${action}" "${follow}"
+}
+
+main "$@"

@@ -1,11 +1,55 @@
 # legion-setup
 
 # Legion Pro 7i (Gen 10, 2025) Dual-Boot AI Workstation Playbook
-
 **Windows 11 Home + Ubuntu 24.04.x | Secure Boot ON | Dynamic Graphics | Clean storage | Battery/RAM optimized | RTX for AI**
 
-> Cut-paste-ready, end-to-end playbook.
+> Cut-paste-ready, end-to-end playbook.  
 > Includes: **Ventoy (Secure Boot)**, **Windows + WSL + Docker on D:**, **Linux /home dev universe**, **multi-Java + multi-Node + Miniconda**, **Android Studio**, **VS Code**, **Chrome profile/cache placement + iGPU targeting**, **shared NTFS data lake**, **root partition growth control**, **HWE kernel + GA fallback kernel + GRUB menu**, **snap removal (clean) + DEB restore**, and **Legion control stack (fans/power/keyboard)**.
+
+---
+
+## 0A) Repo automation scripts (setup-aryan) — staging + recovery (Windows/Linux kept separate)
+
+This repo now includes **OS-specific setup frameworks** you can stage onto the system so you can re-run fixes anytime (even after breakage).
+
+### Repo layout (added)
+- `linux-setup/`
+  - `stage-aryan-setup.sh` → stages Linux commands into: `/usr/local/aryan-setup/`
+  - `bin/` → wrapper commands (`setup-aryan`, `setup-aryan-log`)
+  - `actions/` → runnable actions (ex: `recover-linux-gui-igpu-deb`, `validate-linux-gpu`)
+  - `completions/` → bash completion for `setup-aryan`
+- `windows-setup/`
+  - `stage-aryan-setup.ps1` → stages Windows commands into: `C:\Tools\aryan-setup\`
+  - `bin/` → wrapper commands (`setup-aryan.ps1`, `setup-aryan-log.ps1`)
+  - `actions/` → future Windows actions go here
+
+### Linux staging target (added)
+- Binaries/scripts: `/usr/local/aryan-setup/`
+- Wrapper commands (symlinked): `/usr/local/bin/setup-aryan`, `/usr/local/bin/setup-aryan-log`
+- Logs: `/var/log/setup-aryan/`
+- State: `/var/log/setup-aryan/state-files/`
+
+### Windows staging target (added)
+- Binaries/scripts: `C:\Tools\aryan-setup\`
+- Logs: `D:\aryan-setup\logs\`
+- State: `D:\aryan-setup\state\`
+
+### Staging commands (added)
+**Linux (run from repo root):**
+```bash
+sudo bash ./linux-setup/stage-aryan-setup.sh
+````
+
+**Windows (run from repo root in an elevated PowerShell):**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\windows-setup\stage-aryan-setup.ps1
+```
+
+After staging:
+
+* Linux: `setup-aryan list`, `setup-aryan recover-linux-gui-igpu-deb`, `setup-aryan validate-linux-gpu`
+* Windows: `setup-aryan list` (more actions can be added under `windows-setup/actions/`)
 
 ---
 
@@ -23,8 +67,7 @@
 ### Confirmed wiring constraint (critical)
 
 * **HDMI external output is physically routed to the NVIDIA dGPU.**
-
-  * You verified: switching BIOS to UMA killed HDMI output in Windows.
+* You verified: switching BIOS to UMA killed HDMI output in Windows.
 * Therefore:
 
   * You **cannot** fully power-off the RTX while HDMI is in use.
@@ -46,12 +89,12 @@
 **Non-negotiable rule**
 
 * **Do not store dev environments or repos on `F:` (NTFS) from Linux.**
+* `F:` is for big, mostly-static data: datasets/weights/checkpoints/exports.
 
-  * `F:` is for big, mostly-static data: datasets/weights/checkpoints/exports.
-* **All dev environments + repos live on:**
+All dev environments + repos live on:
 
-  * Windows → `D:`
-  * Linux → `/home`
+* Windows → `D:`
+* Linux → `/home`
 
 ---
 
@@ -102,7 +145,10 @@ Ventoy auto-creates:
 
 * a small EFI boot partition
 * a large data partition for ISOs
-  No manual partitioning needed. (Ventoy’s Secure Boot flow is “Enroll Key / Enroll Hash”.) ([ventoy.net][2])
+
+No manual partitioning needed.
+
+(Ventoy’s Secure Boot flow is “Enroll Key / Enroll Hash”.) ([ventoy.net][2])
 
 ### 2.3 Copy ISOs (recommended layout)
 
@@ -111,8 +157,8 @@ On the large Ventoy partition:
 ```text
 ISO/Windows/Win11.iso
 ISO/Linux/Ubuntu_24.04.iso
-ISO/Rescue/Rescuezilla.iso          (optional)
-TOOLS/Lenovo/BIOS/                  (optional)
+ISO/Rescue/Rescuezilla.iso (optional)
+TOOLS/Lenovo/BIOS/ (optional)
 ```
 
 ### 2.4 First boot with Secure Boot ON (one-time enrollment)
@@ -127,7 +173,8 @@ TOOLS/Lenovo/BIOS/                  (optional)
 
 **Rule for encryption stability**
 
-* If you later boot an unsigned ISO, you *might* need to temporarily disable Secure Boot, and Windows may ask for a recovery key when you come back. If you want “Secure Boot always ON”, stick to signed ISOs (Windows/Ubuntu, and only Rescue ISOs you have personally tested on this machine).
+* If you later boot an unsigned ISO, you *might* need to temporarily disable Secure Boot, and Windows may ask for a recovery key when you come back.
+* If you want “Secure Boot always ON”, stick to signed ISOs (Windows/Ubuntu, and only Rescue ISOs you have personally tested on this machine).
 
 ---
 
@@ -156,9 +203,11 @@ Fast Startup can leave NTFS “hibernated” and Linux will refuse to mount or c
 ### 3.3 Windows encryption (Device Encryption on Home)
 
 * Settings → Privacy & security → Device encryption
-  If available, enable it and store the recovery key safely.
+* If available, enable it and store the recovery key safely.
 
-> **PCR7 binding not supported**: that Windows status can stay “not supported” depending on firmware/boot state history. The practical takeaway for this playbook: keep **Secure Boot ON** consistently once you enable encryption, and avoid flipping core boot settings every week.
+> **PCR7 binding not supported**: that Windows status can stay “not supported” depending on firmware/boot state history.
+
+The practical takeaway for this playbook: keep **Secure Boot ON** consistently once you enable encryption, and avoid flipping core boot settings every week.
 
 ---
 
@@ -248,9 +297,7 @@ Everything (extensions/settings) stays in `D:\apps\VSCode\data\`.
   * `D:\dev\tools\jdk\jdk-17\`
   * `D:\dev\tools\jdk\jdk-8\` (only if required)
 
-PowerShell switch scripts:
-
-`D:\dev\tools\scripts\java21.ps1`
+PowerShell switch scripts: `D:\dev\tools\scripts\java21.ps1`
 
 ```powershell
 $env:JAVA_HOME="D:\dev\tools\jdk\jdk-21"
@@ -320,9 +367,8 @@ Shortcut target:
 **GPU policy on Windows (important)**
 
 * Settings → System → Display → Graphics
-
-  * Chrome / VS Code / Discord / browsers → **Power saving (iGPU)**
-  * Training tools (Python, CUDA apps) → **High performance (NVIDIA)**
+* Chrome / VS Code / Discord / browsers → **Power saving (iGPU)**
+* Training tools (Python, CUDA apps) → **High performance (NVIDIA)**
 
 ---
 
@@ -387,6 +433,7 @@ Set:
 ```ini
 GRUB_TIMEOUT_STYLE=menu
 GRUB_TIMEOUT=10
+
 # Optional (more transparent boot for debugging)
 GRUB_CMDLINE_LINUX_DEFAULT=""
 ```
@@ -410,7 +457,8 @@ Now you’ll see:
 
 ### 9.1 Why “open kernel modules” matter on modern NVIDIA
 
-NVIDIA explicitly documents “Open Kernel Modules” installation routes on Ubuntu (packaged installs), vs proprietary modules and vs manual `.run` installs. For an RTX 50-series laptop, prefer packaged installs + open module flavor when available. ([NVIDIA Docs][3])
+NVIDIA explicitly documents “Open Kernel Modules” installation routes on Ubuntu (packaged installs), vs proprietary modules and vs manual `.run` installs. For an RTX 50-series laptop, prefer packaged installs + open module flavor when available.
+([NVIDIA Docs][3])
 
 ### 9.2 Clean slate (if you’ve been experimenting)
 
@@ -429,27 +477,24 @@ Reboot into the iGPU path (it should still boot).
 
 1. Discover what Ubuntu recommends:
 
-```bash
-sudo ubuntu-drivers devices
-```
-
+   ```bash
+   sudo ubuntu-drivers devices
+   ```
 2. Install using ubuntu-drivers (this stays aligned with your system and updates):
 
-```bash
-sudo ubuntu-drivers autoinstall
-```
-
+   ```bash
+   sudo ubuntu-drivers autoinstall
+   ```
 3. **Secure Boot MOK enrollment**
 
-* During install you may be asked to set a password.
-* On reboot you must complete MOK enrollment (blue screen).
-  Ubuntu’s Secure Boot chain uses shim + MokManager for this flow. ([Ubuntu Documentation][4])
-
+   * During install you may be asked to set a password.
+   * On reboot you must complete MOK enrollment (blue screen).
+   * Ubuntu’s Secure Boot chain uses shim + MokManager for this flow. ([Ubuntu Documentation][4])
 4. Verify:
 
-```bash
-nvidia-smi
-```
+   ```bash
+   nvidia-smi
+   ```
 
 ### 9.4 If you specifically want the “open” flavor (when your repos provide it)
 
@@ -473,60 +518,30 @@ Then reboot and verify with `nvidia-smi`.
 
 ### 9.5 Do you need to reinstall build-essential after a kernel upgrade?
 
-No.
-But you **do** need headers for each installed kernel so DKMS modules can build.
-
-Check:
-
-```bash
-dpkg -l | grep -E 'linux-headers|linux-image' | grep -E 'generic|hwe' || true
-```
-
-If headers are missing for the running kernel:
-
-```bash
-sudo apt -y install "linux-headers-$(uname -r)"
-```
+No. But you **do** need headers for each installed kernel so DKMS modules can build.
 
 ---
 
-## 10) Remove Snap completely + restore GNOME/Chrome/Thunderbird as native APT/DEB
+## 10) Remove Snap (clean) + block it from returning (Ubuntu 24.04)
 
-> This section is written to match the behavior you want:
->
-> * **snap removed and blocked**
-> * GNOME desktop stays healthy (APT packages)
-> * Chrome installed via Google repo (keyring method)
-> * Thunderbird installed as DEB (mozillateam PPA, pinned)
-> * You avoid snap “wrappers” coming back later
-
-### 10.1 Phase 1 — Snap removal (clean slate)
+### 10.1 Remove snaps + snapd
 
 ```bash
-# Stop snap services (ignore errors if not present)
-sudo systemctl disable --now snapd.service snapd.socket snapd.seeded.service 2>/dev/null || true
+sudo snap remove --purge firefox || true
+sudo snap remove --purge thunderbird || true
+sudo snap remove --purge gnome-42-2204 || true
+sudo snap remove --purge gtk-common-themes || true
+sudo snap remove --purge bare || true
+sudo snap remove --purge core22 || true
 
-# Remove theme/runtime layers
-sudo snap remove --purge gnome-42-2204 2>/dev/null || true
-sudo snap remove --purge gtk-common-themes 2>/dev/null || true
-
-# Remove base snaps
-sudo snap remove --purge bare 2>/dev/null || true
-sudo snap remove --purge core22 2>/dev/null || true
-
-# Remove snap daemon (may fail if already removed)
-sudo snap remove --purge snapd 2>/dev/null || true
-
-# Purge snapd packages
 sudo apt purge -y snapd
 sudo apt autoremove --purge -y
 
-# Cleanup directories
 rm -rf ~/snap
 sudo rm -rf /snap /var/snap /var/lib/snapd /var/cache/snapd /usr/lib/snapd
 ```
 
-### 10.2 Phase 2 — Block snapd from ever returning
+### 10.2 Block snapd from being reinstalled
 
 ```bash
 echo 'Package: snapd
@@ -534,54 +549,22 @@ Pin: release a=*
 Pin-Priority: -10' | sudo tee /etc/apt/preferences.d/nosnap.pref
 ```
 
-### 10.3 Phase 3 — Restore GNOME desktop components from APT
-
-```bash
-sudo apt update
-sudo apt install -y --reinstall ubuntu-desktop gnome-shell gdm3
-sudo reboot
-```
-
-### 10.4 Phase 4 — Install Chrome (Google repo, modern keyring method)
-
-```bash
-sudo mkdir -p /usr/share/keyrings
-curl -fSsL https://dl.google.com/linux/linux_signing_key.pub \
-  | gpg --dearmor \
-  | sudo tee /usr/share/keyrings/google-chrome.gpg >/dev/null
-
-echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
-  | sudo tee /etc/apt/sources.list.d/google-chrome.list
-
-sudo apt update
-sudo apt install -y google-chrome-stable
-```
-
-### 10.5 Phase 5 — Install Thunderbird as DEB (mozillateam PPA, pinned)
-
-```bash
-sudo add-apt-repository ppa:mozillateam/ppa -y
-
-echo 'Package: *
-Pin: release o=LP-PPA-mozillateam
-Pin-Priority: 1001' | sudo tee /etc/apt/preferences.d/mozilla-ppa
-
-sudo apt update
-sudo apt install -y thunderbird
-```
-
 ---
 
-## 11) Linux graphics policy: default iGPU for *all GUI*, RTX only for AI
+## 11) iGPU-first policy on Ubuntu (don’t wake RTX for GUI apps)
 
-### 11.1 Set hybrid graphics to “On-Demand” (iGPU default)
+### 11.1 PRIME profile: on-demand (iGPU desktop, RTX on request)
 
 ```bash
 sudo prime-select on-demand
 sudo reboot
 ```
 
-This makes iGPU the default renderer; dGPU is only used when you explicitly offload (or when HDMI forces it).
+Verify:
+
+```bash
+sudo prime-select query
+```
 
 ### 11.2 Install switcheroo-control (adds “Launch using Dedicated GPU” option)
 
@@ -619,7 +602,6 @@ mkdir -p "$HOME/profiles/chrome"
 
 ```bash
 mkdir -p "$HOME/.local/bin"
-
 cat > "$HOME/.local/bin/chrome-igpu" << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -628,13 +610,13 @@ exec /usr/bin/google-chrome-stable \
   --user-data-dir="$HOME/profiles/chrome" \
   --disk-cache-dir="$HOME/local_chrome_storage/cache" \
   --gpu-testing-vendor-id=0x8086 \
-  %U
+  "$@"
 EOF
-
 chmod +x "$HOME/.local/bin/chrome-igpu"
 ```
 
-Ensure `~/.local/bin` is in PATH (Ubuntu usually does this already). If not:
+Ensure `~/.local/bin` is in PATH (Ubuntu usually does this already).
+If not:
 
 ```bash
 grep -q 'export PATH="$HOME/.local/bin:$PATH"' ~/.bashrc || \
@@ -649,7 +631,7 @@ Copy the system desktop file to your user area:
 ```bash
 mkdir -p "$HOME/.local/share/applications"
 cp /usr/share/applications/google-chrome.desktop \
-   "$HOME/.local/share/applications/google-chrome-igpu.desktop"
+  "$HOME/.local/share/applications/google-chrome-igpu.desktop"
 ```
 
 Edit the Exec line:
@@ -677,7 +659,8 @@ Now you can launch Chrome from:
 * Activities search
 * Dock favorites
 * App grid
-  …and it will use your wrapper (iGPU preference + cache in /home).
+
+…and it will use your wrapper (iGPU preference + cache in /home).
 
 > Note: `%U` is a **valid desktop placeholder**. `%h` is **not** a standard `.desktop` placeholder. Use `%U` for multiple URLs or `%u` for single. (`%U` is what Chrome desktop files commonly use.)
 
@@ -685,7 +668,8 @@ Now you can launch Chrome from:
 
 ## 13) VS Code on Linux: keep it on /home + optional “portable-ish” placement
 
-By default, VS Code on Linux stores data under `/home` (good). If you want to keep everything under your own structure:
+By default, VS Code on Linux stores data under `/home` (good).
+If you want to keep everything under your own structure:
 
 ### Option A (recommended): normal install (already safe)
 
@@ -715,7 +699,9 @@ Terminal=false
 EOF
 ```
 
-> `%h` in desktop entries expands to the user’s home directory **in many desktop environments**, but it’s not as universally dependable as using a wrapper script. If you want maximum robustness, use the same wrapper technique as Chrome (recommended whenever you care about path expansion).
+> `%h` in desktop entries expands to the user’s home directory **in many desktop environments**, but it’s not as universally dependable as using a wrapper script.
+
+If you want maximum robustness, use the same wrapper technique as Chrome (recommended whenever you care about path expansion).
 
 ---
 
@@ -742,7 +728,7 @@ sudo nano /etc/fstab
 Add (replace UUID):
 
 ```fstab
-UUID=XXXX-XXXX  /mnt/shared  ntfs3  defaults,noatime,uid=1000,gid=1000,umask=022  0  0
+UUID=XXXX-XXXX /mnt/shared ntfs3 defaults,noatime,uid=1000,gid=1000,umask=022 0 0
 ```
 
 Apply:
@@ -1006,6 +992,7 @@ Ubuntu ships power-profiles-daemon by default:
 ```bash
 powerprofilesctl get
 powerprofilesctl set balanced
+
 # or for max battery (when not training)
 powerprofilesctl set power-saver
 ```
@@ -1020,7 +1007,9 @@ powerprofilesctl set power-saver
 
 ### 18.3 Wayland note (RAM + stability)
 
-Ubuntu GNOME uses Wayland by default on many setups; RAM savings are not huge, but Wayland can reduce some compositor weirdness on hybrid systems. Your real RAM win is still:
+Ubuntu GNOME uses Wayland by default on many setups; RAM savings are not huge, but Wayland can reduce some compositor weirdness on hybrid systems.
+
+Your real RAM win is still:
 
 * limiting background apps
 * keeping WSL capped (Windows side)
@@ -1036,8 +1025,10 @@ Windows:
 
 Linux equivalents:
 
-* **LenovoLegionLinux (LLL)**: DKMS kernel module + daemon (`legiond`) + CLI/GUI tooling for Legion controls (fan/power features vary by model). It’s packaged on some distros and commonly installed from source on Ubuntu. ([Debian Packages][5])
-* **Keyboard RGB**: L5P-Keyboard-RGB supports many Legion generations on Linux/Windows (check your exact keyboard controller compatibility). ([GitHub][6])
+* **LenovoLegionLinux (LLL)**: DKMS kernel module + daemon (`legiond`) + CLI/GUI tooling for Legion controls (fan/power features vary by model).
+  It’s packaged on some distros and commonly installed from source on Ubuntu. ([Debian Packages][5])
+* **Keyboard RGB**: L5P-Keyboard-RGB supports many Legion generations on Linux/Windows (check your exact keyboard controller compatibility).
+  ([GitHub][6])
 
 ### 19.1 Install LenovoLegionLinux on Ubuntu (source-based approach)
 
@@ -1047,13 +1038,15 @@ Because packaging varies on Ubuntu, the most reliable approach is “follow the 
 sudo apt -y install dkms build-essential git
 mkdir -p ~/dev/tools
 cd ~/dev/tools
-git clone <LLL_REPO_URL_HERE>
+git clone <repo>
 cd <repo>
 # then follow repo: dkms install / make install / install.sh (repo-dependent)
 ```
 
 **Important DKMS rule with dual kernels**
-When you keep **GA + HWE** kernels installed, DKMS modules should build for both. If one kernel is missing headers, you fix it with:
+When you keep **GA + HWE** kernels installed, DKMS modules should build for both.
+
+If one kernel is missing headers, you fix it with:
 
 ```bash
 sudo apt -y install linux-headers-generic linux-headers-generic-hwe-24.04
@@ -1061,7 +1054,8 @@ sudo apt -y install linux-headers-generic linux-headers-generic-hwe-24.04
 
 ### 19.2 Optional: GUI front-ends
 
-Some desktop widgets/front-ends exist that talk to Legion features via the kernel module stack (availability varies). PlasmaVantage is one example in the ecosystem (KDE-oriented). ([about.gitlab.com][7])
+Some desktop widgets/front-ends exist that talk to Legion features via the kernel module stack (availability varies). PlasmaVantage is one example in the ecosystem (KDE-oriented).
+([about.gitlab.com][7])
 
 ---
 
@@ -1092,8 +1086,8 @@ Make Linux reproducible:
 Helpful exports:
 
 ```bash
-conda env export > ~/dev/repos/<your-setup-repo>/env.yml
-pip freeze > ~/dev/repos/<your-setup-repo>/requirements.txt
+conda env export > ~/dev/repos/<repo>/env.yml
+pip freeze > ~/dev/repos/<repo>/requirements.txt
 ```
 
 ---
@@ -1182,3 +1176,6 @@ If you want, I can also generate a **1-page punch-list version** of this (same s
 [5]: https://packages.debian.org/source/sid/lenovolegionlinux?utm_source=chatgpt.com "Details of source package lenovolegionlinux in sid"
 [6]: https://github.com/4JX/L5P-Keyboard-RGB?utm_source=chatgpt.com "4JX/L5P-Keyboard-RGB"
 [7]: https://gitlab.com/Scias/plasmavantage?utm_source=chatgpt.com "PlasmaVantage - Scias"
+
+
+---

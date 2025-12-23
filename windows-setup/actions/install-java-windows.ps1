@@ -1,44 +1,28 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-Installs/ensures Temurin JDK 21 (portable) on Windows and pins JAVA_HOME to D:\dev (idempotent).
+Installs Temurin JDK 21 (portable) under D:\dev\tools\jdk\temurin-21\current and pins JAVA_HOME.
 
 .DESCRIPTION
-- Downloads the latest Temurin JDK 21 (Windows x64, HotSpot) as a ZIP (portable).
+- Downloads the latest Temurin JDK 21 ZIP for Windows x64 from Adoptium.
 - Extracts into: D:\dev\tools\jdk\temurin-21\current
-- Sets USER-level JAVA_HOME and adds %JAVA_HOME%\bin to USER PATH (idempotent).
+- Sets USER env var: JAVA_HOME
+- Adds JAVA_HOME\bin to USER PATH
+- Writes state file: D:\aryan-setup\state-files\install-java-windows.state
 
 Logging + state (repo standard):
 - Logs:  D:\aryan-setup\logs\install-java-windows.log
-- State: D:\aryan-setup\state-files\install-java-windows.state   (INI-style key=value, UTF-8; NO JSON)
+- State: D:\aryan-setup\state-files\install-java-windows.state (INI-style key=value; UTF-8; NO JSON)
 
 Force semantics:
-- Default: if prior state is success, skip safely
+- Default: if state indicates previous success, skip safely
 - -Force: re-run and refresh the installation + state
-
-.PREREQUISITES
-- Windows 11
-- Windows PowerShell 5.1
-- Internet access (to download Temurin JDK)
-- D:\ drive present (repo layout)
 
 .PARAMETER Force
 Re-run even if state indicates previous success.
 
 .PARAMETER DevRoot
 Root of the dev volume (default: D:\dev)
-
-.PARAMETER Help
-Show detailed help.
-
-.EXAMPLE
-setup-aryan install-java-windows
-
-.EXAMPLE
-setup-aryan install-java-windows -Force
-
-.EXAMPLE
-setup-aryan install-java-windows -DevRoot D:\dev
 #>
 
 [CmdletBinding()]
@@ -47,48 +31,29 @@ param(
   [switch]$Force,
 
   [Parameter(Mandatory=$false)]
-  [string]$DevRoot = "D:\dev",
-
-  [Parameter(Mandatory=$false)]
-  [switch]$Help
+  [string]$DevRoot = "D:\dev"
 )
 
-Set-StrictMode -Version 2
+Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-
-# Defensive: if -Force accidentally bound into DevRoot, normalize.
-if ($DevRoot -like "-*") {
-  $Force = $true
-  $DevRoot = "D:\dev"
-}
 
 $ActionName = "install-java-windows"
 $Version    = "1.1.0"
 
 $LogsRoot   = "D:\aryan-setup\logs"
 $StateRoot  = "D:\aryan-setup\state-files"
-$LogFile    = Join-Path $LogsRoot  "$ActionName.log"
-$StateFile  = Join-Path $StateRoot "$ActionName.state"
-
-function Show-Help { Get-Help -Detailed $MyInvocation.MyCommand.Path }
-
-if ($Help) { Show-Help; exit 0 }
+$LogFile    = Join-Path $LogsRoot  "install-java-windows.log"
+$StateFile  = Join-Path $StateRoot "install-java-windows.state"
 
 function Ensure-Dir {
   param([Parameter(Mandatory=$true)][string]$Path)
-  if (-not (Test-Path -LiteralPath $Path)) {
-    New-Item -ItemType Directory -Path $Path -Force | Out-Null
-  }
+  if (-not (Test-Path -LiteralPath $Path)) { New-Item -ItemType Directory -Path $Path -Force | Out-Null }
 }
 
 function Get-ISTStamp {
-  try {
-    $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById("India Standard Time")
-    $dt = [System.TimeZoneInfo]::ConvertTime((Get-Date), $tz)
-    return ("IST {0}" -f $dt.ToString("dd-MM-yyyy HH:mm:ss"))
-  } catch {
-    return ("IST {0}" -f (Get-Date).ToString("dd-MM-yyyy HH:mm:ss"))
-  }
+  $tz = [TimeZoneInfo]::FindSystemTimeZoneById("India Standard Time")
+  $nowIst = [TimeZoneInfo]::ConvertTime([DateTime]::Now, $tz)
+  return ("IST {0}" -f $nowIst.ToString("dd-MM-yyyy HH:mm:ss"))
 }
 
 function Write-Log {
@@ -96,12 +61,9 @@ function Write-Log {
     [Parameter(Mandatory=$true)][ValidateSet("Error","Warning","Info","Debug")][string]$Level,
     [Parameter(Mandatory=$true)][string]$Message
   )
-
   Ensure-Dir -Path $LogsRoot
   Ensure-Dir -Path $StateRoot
-
   Add-Content -LiteralPath $LogFile -Value "$(Get-ISTStamp) $Level $Message" -Encoding UTF8
-
   switch ($Level) {
     "Error"   { Write-Error   $Message -ErrorAction Continue }
     "Warning" { Write-Warning $Message }
@@ -123,7 +85,7 @@ function Read-State {
     if ($idx -lt 1) { continue }
     $k = $ln.Substring(0, $idx).Trim()
     $v = $ln.Substring($idx + 1).Trim()
-    if ($k.Length -gt 0) { $map[$k] = $v }
+    if ($k) { $map[$k] = $v }
   }
   return $map
 }
@@ -135,21 +97,18 @@ function Write-State {
     [Parameter(Mandatory=$true)][string]$StartedAt,
     [Parameter(Mandatory=$true)][string]$FinishedAt
   )
-
-  $fields = @()
-  $fields += "action=$ActionName"
-  $fields += "status=$Status"
-  $fields += "rc=$Rc"
-  $fields += "started_at=$StartedAt"
-  $fields += "finished_at=$FinishedAt"
-  $fields += "user=$([Environment]::UserName)"
-  $fields += "host=$($env:COMPUTERNAME)"
-  $fields += "log_path=$LogFile"
-  $fields += "version=$Version"
-
-  $tmp = "$StateFile.tmp"
-  Set-Content -LiteralPath $tmp -Value $fields -Encoding UTF8
-  Move-Item -LiteralPath $tmp -Destination $StateFile -Force
+  Ensure-Dir -Path $StateRoot
+  $content = @(
+    "status=$Status",
+    "rc=$Rc",
+    "action=$ActionName",
+    "version=$Version",
+    "started_at=$StartedAt",
+    "finished_at=$FinishedAt",
+    "force=$Force",
+    "dev_root=$DevRoot"
+  )
+  Set-Content -LiteralPath $StateFile -Value $content -Encoding UTF8
 }
 
 function Ensure-UserEnvVar {
@@ -173,7 +132,6 @@ function Add-ToUserPath {
   if ([string]::IsNullOrWhiteSpace($current)) { $current = "" }
 
   $parts = $current.Split(";") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
-
   foreach ($p in $parts) {
     if ($p.TrimEnd("\") -ieq $DirToAdd.TrimEnd("\")) {
       Write-Log Debug "USER PATH already contains: $DirToAdd"
@@ -193,7 +151,7 @@ function Test-Java21Present {
   try {
     $out = & $JavaExe -version 2>&1
     $txt = ($out | Out-String)
-    return ($txt -match 'version "21(\.|")')
+    return ($txt -match 'version "21\.')
   } catch {
     return $false
   }
@@ -233,7 +191,7 @@ $rc = 0
 $status = "success"
 
 try {
-  if (-not (Test-Path -LiteralPath "D:\")) { throw "D:\ drive not found. Repo policy expects tools on D:\." }
+  if (-not (Test-Path -LiteralPath "D:\")) { throw "D:\ drive not found. Repo policy expects tools on D:\" }
 
   Ensure-Dir -Path $DevRoot
 
@@ -280,7 +238,6 @@ try {
     Remove-IfExists -Path $staging
     Ensure-Dir -Path $staging
 
-    # IMPORTANT: -LiteralPath does NOT expand wildcards. Use -Path for "*" copy.
     Copy-Item -Path (Join-Path $picked "*") -Destination $staging -Recurse -Force
 
     Remove-IfExists -Path $currentRoot

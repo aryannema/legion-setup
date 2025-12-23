@@ -15,9 +15,8 @@ Invariants (repo policy):
 .USAGE
   setup-aryan -Help
   setup-aryan list
-  setup-aryan run <action> [-Force] [-- <action args...>]
-  setup-aryan <action> [-Force] [-- <action args...>]
-  setup-aryan version
+  setup-aryan run <action-name> [action args...]
+  setup-aryan <action-name> [action args...]
 
 .EXAMPLES
   setup-aryan list
@@ -35,23 +34,19 @@ param(
   [Parameter(Position=1, Mandatory=$false)]
   [string]$Action = "",
 
-  # IMPORTANT: declare named switches BEFORE the catch-all, otherwise -Force can get swallowed.
+  [Parameter(ValueFromRemainingArguments=$true)]
+  [string[]]$Rest = @(),
+
   [Parameter(Mandatory=$false)]
   [switch]$Force,
 
   [Parameter(Mandatory=$false)]
-  [switch]$Help,
-
-  [Parameter(ValueFromRemainingArguments=$true)]
-  [string[]]$Rest = @()
+  [switch]$Help
 )
 
-Set-StrictMode -Version 2
+Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-# ---------------------------
-# Paths (staged tree)
-# ---------------------------
 $LogsRoot  = "D:\aryan-setup\logs"
 $StateRoot = "D:\aryan-setup\state-files"
 
@@ -92,7 +87,7 @@ function Write-Log {
   try { Ensure-Dir -Path $LogsRoot } catch {}
   try { Write-LogLine -Level $Level -Message $Message -LogPath $wrapperLog } catch {}
 
-  # IMPORTANT: do not let logging become terminating under $ErrorActionPreference="Stop"
+  # IMPORTANT: $ErrorActionPreference="Stop" makes Write-Error terminating unless we force Continue.
   switch ($Level) {
     "Error"   { Write-Error   $Message -ErrorAction Continue }
     "Warning" { Write-Warning $Message }
@@ -102,9 +97,6 @@ function Write-Log {
 }
 
 function Assert-Environment {
-  if (-not (Test-Path -LiteralPath "D:\")) {
-    throw "D:\ drive not found. Repo policy expects logs/state on D:\."
-  }
   Ensure-Dir -Path $LogsRoot
   Ensure-Dir -Path $StateRoot
 
@@ -120,11 +112,11 @@ setup-aryan (Windows PowerShell 5.1)
 Usage:
   setup-aryan -Help
   setup-aryan list
-  setup-aryan run <action> [-Force] [-- <action args...>]
-  setup-aryan <action> [-Force] [-- <action args...>]
   setup-aryan version
+  setup-aryan run <action-name> [action args...]
+  setup-aryan <action-name> [action args...]
 
-Notes:
+Repo policy:
   - Logs : $LogsRoot
   - State: $StateRoot   (actions write <action>.state as key=value; NO JSON)
   - -Force is forwarded to actions (unless already present)
@@ -147,10 +139,8 @@ function Get-ActionNames {
   $files = Get-ChildItem -LiteralPath $ActionsDir -Filter "*.ps1" -File -ErrorAction Stop
   $names = @()
   foreach ($f in $files) {
-    $n = [System.IO.Path]::GetFileNameWithoutExtension($f.Name)
-    if ([string]::IsNullOrWhiteSpace($n)) { continue }
-    if ($n.StartsWith("_")) { continue }
-    $names += $n
+    $n = [IO.Path]::GetFileNameWithoutExtension($f.Name)
+    if (-not [string]::IsNullOrWhiteSpace($n)) { $names += $n }
   }
   return ($names | Sort-Object -Unique)
 }
@@ -191,10 +181,10 @@ function Invoke-Action {
 
   $path = Resolve-ActionPath -ActionName $ActionName
   if ($null -eq $path) {
-    throw "Unknown action: $ActionName (not found in $ActionsDir)"
+    Show-Usage
+    throw "Unknown action: $ActionName"
   }
 
-  # Forward -Force if requested and not already present
   $finalArgs = @()
   if ($Force) {
     $hasForce = $false
@@ -226,27 +216,17 @@ try {
     "version" { Cmd-Version; exit 0 }
     "run" {
       if ([string]::IsNullOrWhiteSpace($Action)) {
-        throw "Missing action name. Usage: setup-aryan run <action> [-Force] [-- <action args...>]"
+        Show-Usage
+        throw "Missing action name. Usage: setup-aryan run <action-name> [args...]"
       }
-
-      # Support `--` separator.
-      $actionArgs = @()
-      if ($Rest.Count -gt 0) {
-        if ($Rest[0] -eq "--") { $actionArgs = $Rest[1..($Rest.Count-1)] } else { $actionArgs = $Rest }
-      }
-
-      Invoke-Action -ActionName $Action -ActionArgs $actionArgs
+      Invoke-Action -ActionName $Action -ActionArgs $Rest
     }
     default {
-      # If first token is an action name, treat as action.
       $maybeAction = $Command
       $actionArgs = @()
-      if ($Action) { $actionArgs += $Action }
-      if ($Rest.Count -gt 0) { $actionArgs += $Rest }
 
-      if ($actionArgs.Count -gt 0 -and $actionArgs[0] -eq "--") {
-        $actionArgs = $actionArgs[1..($actionArgs.Count-1)]
-      }
+      if (-not [string]::IsNullOrWhiteSpace($Action)) { $actionArgs += $Action }
+      if ($Rest -and $Rest.Count -gt 0) { $actionArgs += $Rest }
 
       $path = Resolve-ActionPath -ActionName $maybeAction
       if ($null -ne $path) {

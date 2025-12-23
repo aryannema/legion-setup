@@ -87,6 +87,7 @@ function Write-Log {
   try { Ensure-Dir -Path $LogsRoot } catch {}
   try { Write-LogLine -Level $Level -Message $Message -LogPath $wrapperLog } catch {}
 
+  # IMPORTANT: $ErrorActionPreference="Stop" makes Write-Error terminating unless we force Continue.
   switch ($Level) {
     "Error"   { Write-Error   $Message -ErrorAction Continue }
     "Warning" { Write-Warning $Message }

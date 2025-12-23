@@ -41,10 +41,13 @@ param(
   [switch]$Force,
 
   [Parameter(Mandatory=$false)]
-  [string]$DevRoot = "D:\dev"
+  [string]$DevRoot = "D:\dev",
+
+  [Parameter(Mandatory=$false)]
+  [switch]$Help
 )
 
-Set-StrictMode -Version Latest
+Set-StrictMode -Version 2
 $ErrorActionPreference = "Stop"
 
 $ActionName = "install-node-toolchain-windows"
@@ -52,8 +55,20 @@ $Version    = "1.1.1"
 
 $LogsRoot   = "D:\aryan-setup\logs"
 $StateRoot  = "D:\aryan-setup\state-files"
-$LogFile    = Join-Path $LogsRoot  "install-node-toolchain-windows.log"
-$StateFile  = Join-Path $StateRoot "install-node-toolchain-windows.state"
+$LogFile    = Join-Path $LogsRoot  "$ActionName.log"
+$StateFile  = Join-Path $StateRoot "$ActionName.state"
+
+function Show-Help {
+@"
+$ActionName (version=$Version)
+
+Usage:
+  setup-aryan install-node-toolchain-windows-new
+  setup-aryan install-node-toolchain-windows-new -Force
+"@ | Write-Host
+}
+
+if ($Help) { Show-Help; exit 0 }
 
 function Ensure-Dir {
   param([Parameter(Mandatory=$true)][string]$Path)
@@ -61,10 +76,13 @@ function Ensure-Dir {
 }
 
 function Get-ISTStamp {
-  $tz = [TimeZoneInfo]::FindSystemTimeZoneById("India Standard Time")
-  $nowIst = [TimeZoneInfo]::ConvertTime([DateTime]::Now, $tz)
-  return ("IST {0}" -f $nowIst.ToString("dd-MM-yyyy HH:mm:ss"))
-  return ("IST {0}" -f (Get-Date).ToString("dd-MM-yyyy HH:mm:ss"))
+  try {
+    $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById("India Standard Time")
+    $dt = [System.TimeZoneInfo]::ConvertTime((Get-Date), $tz)
+    return ("IST {0}" -f $dt.ToString("dd-MM-yyyy HH:mm:ss"))
+  } catch {
+    return ("IST {0}" -f (Get-Date).ToString("dd-MM-yyyy HH:mm:ss"))
+  }
 }
 
 function Write-Log {
@@ -75,6 +93,8 @@ function Write-Log {
   Ensure-Dir -Path $LogsRoot
   Ensure-Dir -Path $StateRoot
   Add-Content -LiteralPath $LogFile -Value "$(Get-ISTStamp) $Level $Message" -Encoding UTF8
+
+  # IMPORTANT: $ErrorActionPreference="Stop" makes Write-Error terminating unless we force Continue.
   switch ($Level) {
     "Error"   { Write-Error   $Message -ErrorAction Continue }
     "Warning" { Write-Warning $Message }
@@ -157,7 +177,6 @@ function Add-ToUserPath {
 }
 
 function Set-Tls12 {
-  # PS 5.1 needs TLS 1.2 for many modern HTTPS endpoints
   try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
 }
 
@@ -168,6 +187,7 @@ function Download-File {
   )
 
   Set-Tls12
+
   try {
     Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
     return
@@ -186,54 +206,45 @@ function Download-File {
 }
 
 function Ensure-NvmWindows {
-  $nvmRoot = Join-Path $DevRoot "tools\nvm-windows"
-  $nvmHome = Join-Path $nvmRoot "current"
+  param([Parameter(Mandatory=$false)][switch]$ForceInstall)
+
+  $nvmRoot  = Join-Path $DevRoot "tools\nvm-windows"
+  $nvmHome  = Join-Path $nvmRoot "current"
   $nodeLink = Join-Path $DevRoot "tools\nodejs"
-  $nvmExe = Join-Path $nvmHome "nvm.exe"
+  $nvmExe   = Join-Path $nvmHome "nvm.exe"
 
   Ensure-Dir -Path $nvmRoot
+  Ensure-Dir -Path $nvmHome
   Ensure-Dir -Path $nodeLink
 
-  # Always ensure env vars + PATH entries (idempotent)
   Ensure-UserEnvVar -Name "NVM_HOME" -Value $nvmHome
   Ensure-UserEnvVar -Name "NVM_SYMLINK" -Value $nodeLink
   Add-ToUserPath -DirToAdd $nvmHome
   Add-ToUserPath -DirToAdd $nodeLink
 
-  # Make available in this session too (no restart requirement for the action itself)
-  if (-not ($env:Path -split ';' | Where-Object { $_ -ieq $nvmHome })) { $env:Path = "$nvmHome;$env:Path" }
-  if (-not ($env:Path -split ';' | Where-Object { $_ -ieq $nodeLink })) { $env:Path = "$nodeLink;$env:Path" }
-  $env:NVM_HOME = $nvmHome
+  # Make it usable in this session too
+  $env:NVM_HOME    = $nvmHome
   $env:NVM_SYMLINK = $nodeLink
+  if (-not ($env:Path -split ';' | Where-Object { $_ -ieq $nvmHome }))  { $env:Path = "$nvmHome;$env:Path" }
+  if (-not ($env:Path -split ';' | Where-Object { $_ -ieq $nodeLink })) { $env:Path = "$nodeLink;$env:Path" }
 
-  if (Get-Command nvm -ErrorAction SilentlyContinue) {
-    return
-  }
-
-  if (Test-Path -LiteralPath $nvmExe) {
-    return
-  }
+  if ((Get-Command nvm -ErrorAction SilentlyContinue) -and -not $ForceInstall) { return $nvmExe }
+  if ((Test-Path -LiteralPath $nvmExe) -and -not $ForceInstall) { return $nvmExe }
 
   Write-Log Info "Installing nvm-windows (no-install) into: $nvmHome"
 
   $tmp = Join-Path $env:TEMP "setup-aryan-nvm"
   Ensure-Dir -Path $tmp
   $zip = Join-Path $tmp "nvm-noinstall.zip"
-
   if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue }
 
-  # Official release asset (no-install; avoids UAC prompts)
   Download-File -Url "https://github.com/coreybutler/nvm-windows/releases/latest/download/nvm-noinstall.zip" -OutFile $zip
-
   try { Unblock-File -LiteralPath $zip -ErrorAction SilentlyContinue } catch { }
 
-  # Recreate install dir
-  if (Test-Path -LiteralPath $nvmHome) {
-    if ($Force) {
-      Remove-Item -LiteralPath $nvmHome -Recurse -Force -ErrorAction Stop
-    }
+  if ($ForceInstall -and (Test-Path -LiteralPath $nvmHome)) {
+    Remove-Item -LiteralPath $nvmHome -Recurse -Force -ErrorAction Stop
+    Ensure-Dir -Path $nvmHome
   }
-  Ensure-Dir -Path $nvmHome
 
   Expand-Archive -LiteralPath $zip -DestinationPath $nvmHome -Force
 
@@ -241,24 +252,45 @@ function Ensure-NvmWindows {
     throw "nvm.exe not found after extract at: $nvmExe"
   }
 
-  # Manual install requires settings.txt
   $settings = Join-Path $nvmHome "settings.txt"
-  $arch = "64"
   $content = @(
     "root: $nvmHome",
     "path: $nodeLink",
-    "arch: $arch",
+    "arch: 64",
     "proxy: none"
   )
   Set-Content -LiteralPath $settings -Value $content -Encoding ASCII
 
-  # Validate
-  $ver = (& $nvmExe version) 2>$null
-  if (-not $ver) {
-    Write-Log Warning "nvm installed but version command did not return output in this session."
-  } else {
-    Write-Log Info "nvm ready: $ver"
+  try {
+    $v = (& $nvmExe version) 2>$null
+    if ($v) { Write-Log Info "nvm ready: $v" } else { Write-Log Warning "nvm installed but version did not print in this session." }
+  } catch {
+    Write-Log Warning "nvm installed but version check failed in this session: $($_.Exception.Message)"
   }
+
+  return $nvmExe
+}
+
+function Pin-Caches {
+  Ensure-Dir -Path $DevRoot
+
+  $pnpmHome  = Join-Path $DevRoot "tools\pnpm"
+  $pnpmStore = Join-Path $DevRoot "cache\pnpm-store"
+  $npmCache  = Join-Path $DevRoot "cache\npm-cache"
+
+  Ensure-Dir -Path $pnpmHome
+  Ensure-Dir -Path $pnpmStore
+  Ensure-Dir -Path $npmCache
+
+  Ensure-UserEnvVar -Name "PNPM_HOME" -Value $pnpmHome
+  Add-ToUserPath -DirToAdd $pnpmHome
+
+  Ensure-UserEnvVar -Name "NPM_CONFIG_CACHE" -Value $npmCache
+  Ensure-UserEnvVar -Name "PNPM_STORE_PATH" -Value $pnpmStore
+
+  # current session too
+  $env:PNPM_HOME = $pnpmHome
+  if (-not ($env:Path -split ';' | Where-Object { $_ -ieq $pnpmHome })) { $env:Path = "$pnpmHome;$env:Path" }
 }
 
 function Ensure-Node {
@@ -270,20 +302,38 @@ function Ensure-Node {
     }
   }
 
-  Ensure-NvmWindows
+  $nvmExe = Ensure-NvmWindows
 
   Write-Log Info "Installing Node.js LTS via nvm-windows..."
-  try { & nvm install lts | Out-Null } catch { throw "nvm install lts failed: $($_.Exception.Message)" }
+  & $nvmExe install lts | Out-Null
+  & $nvmExe use lts | Out-Null
 
-  try { & nvm use lts | Out-Null } catch {
-    throw "nvm use lts failed (this often needs symlink permissions). Try running an elevated terminal or enable Windows Developer Mode for non-admin symlinks. Details: $($_.Exception.Message)"
+  $nodeLink = $env:NVM_SYMLINK
+  if ([string]::IsNullOrWhiteSpace($nodeLink)) { $nodeLink = (Join-Path $DevRoot "tools\nodejs") }
+  $nodeExe = Join-Path $nodeLink "node.exe"
+
+  # Ensure current session can resolve node if link exists
+  if (-not ($env:Path -split ';' | Where-Object { $_ -ieq $nodeLink })) { $env:Path = "$nodeLink;$env:Path" }
+
+  if (Test-Path -LiteralPath $nodeExe) {
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+      $ver = (& $nodeExe -v) 2>$null
+      if ($ver) {
+        Write-Log Warning "node.exe exists but PowerShell could not resolve 'node' in this session. Continuing with direct path."
+        Write-Log Info "Node ready: $ver"
+        return
+      }
+      throw "node.exe exists at $nodeExe but could not be executed. Check antivirus/MOTW and re-run with -Force."
+    }
+
+    Write-Log Info "Node ready: $((& node -v) 2>$null)"
+    return
   }
 
-  if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-    throw "nvm reported success but 'node' is still not on PATH in this session. Open a new terminal and re-run."
-  }
+  $nvmCurrent = ""
+  try { $nvmCurrent = (& $nvmExe current) 2>$null } catch { }
 
-  Write-Log Info "Node ready: $((& node -v) 2>$null)"
+  throw "nvm reported success but '$nodeExe' does not exist (nvm current=$nvmCurrent). This usually means Windows blocked creating the node symlink/junction. Run an elevated terminal OR enable Windows Developer Mode, then run: nvm use lts and re-run this action."
 }
 
 function Ensure-CorepackPnpm {
@@ -300,30 +350,8 @@ function Ensure-CorepackPnpm {
   if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
     throw "pnpm not found after corepack activation."
   }
+
   Write-Log Info "pnpm ready: $((& pnpm -v) 2>$null)"
-}
-
-function Pin-Caches {
-  Ensure-Dir -Path $DevRoot
-
-  $pnpmStore = Join-Path $DevRoot "cache\pnpm-store"
-  $npmCache  = Join-Path $DevRoot "cache\npm-cache"
-  $pnpmHome  = Join-Path $DevRoot "tools\pnpm"
-
-  Ensure-Dir -Path $pnpmStore
-  Ensure-Dir -Path $npmCache
-  Ensure-Dir -Path $pnpmHome
-
-  Ensure-UserEnvVar -Name "PNPM_HOME" -Value $pnpmHome
-  Add-ToUserPath -DirToAdd $pnpmHome
-
-  Ensure-UserEnvVar -Name "NPM_CONFIG_CACHE" -Value $npmCache
-  Ensure-UserEnvVar -Name "PNPM_STORE_PATH" -Value $pnpmStore
-
-  # Make these effective in current session too
-  $env:PNPM_HOME = $pnpmHome
-  $env:NPM_CONFIG_CACHE = $npmCache
-  $env:PNPM_STORE_PATH = $pnpmStore
 }
 
 # ---------------------------

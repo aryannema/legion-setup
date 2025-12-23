@@ -1,26 +1,29 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-Installs/ensures Temurin JDK 21 (portable) on Windows and pins JAVA_HOME to D:\dev (idempotent).
+Ensures Node.js LTS + pnpm (via Corepack) with Linux parity (nvm-first) on Windows PowerShell 5.1.
 
 .DESCRIPTION
-- Downloads the latest Temurin JDK 21 (Windows x64, HotSpot) as a ZIP (portable).
-- Extracts into: D:\dev\tools\jdk\temurin-21\current
-- Sets USER-level JAVA_HOME and adds %JAVA_HOME%\bin to USER PATH (idempotent).
+Linux installs Node via nvm; for Windows parity this action expects **nvm-windows** to be present.
+This action:
+- Ensures Node.js LTS is installed via nvm-windows (if Node is not already present).
+- Enables Corepack and activates pnpm.
+- Pins caches/stores to D:\dev\cache\* and PNPM_HOME to D:\dev\tools\pnpm.
 
 Logging + state (repo standard):
-- Logs:  D:\aryan-setup\logs\install-java-windows.log
-- State: D:\aryan-setup\state-files\install-java-windows.state   (INI-style key=value, UTF-8; NO JSON)
+- Logs:  D:\aryan-setup\logs\install-node-toolchain-windows.log
+- State: D:\aryan-setup\state-files\install-node-toolchain-windows.state   (INI-style key=value, UTF-8; NO JSON)
 
 Force semantics:
 - Default: if prior state is success, skip safely
-- -Force: re-run and refresh the installation + state
+- -Force: re-run and refresh configuration
 
 .PREREQUISITES
 - Windows 11
 - Windows PowerShell 5.1
-- Internet access (to download Temurin JDK)
 - D:\ drive present (repo layout)
+- Internet access (only if Node LTS must be installed)
+- nvm-windows installed and available as `nvm` (one-time manual install; this repo avoids winget)
 
 .PARAMETER Force
 Re-run even if state indicates previous success.
@@ -32,13 +35,10 @@ Root of the dev volume (default: D:\dev)
 Show detailed help.
 
 .EXAMPLE
-setup-aryan install-java-windows
+setup-aryan install-node-toolchain-windows
 
 .EXAMPLE
-setup-aryan install-java-windows -Force
-
-.EXAMPLE
-setup-aryan install-java-windows -DevRoot D:\dev
+setup-aryan install-node-toolchain-windows -Force
 #>
 
 [CmdletBinding()]
@@ -56,8 +56,8 @@ param(
 Set-StrictMode -Version 2
 $ErrorActionPreference = "Stop"
 
-$ActionName = "install-java-windows"
-$Version    = "1.1.0"
+$ActionName = "install-node-toolchain-windows"
+$Version    = "1.1.1"
 
 $LogsRoot   = "D:\aryan-setup\logs"
 $StateRoot  = "D:\aryan-setup\state-files"
@@ -65,14 +65,11 @@ $LogFile    = Join-Path $LogsRoot  "$ActionName.log"
 $StateFile  = Join-Path $StateRoot "$ActionName.state"
 
 function Show-Help { Get-Help -Detailed $MyInvocation.MyCommand.Path }
-
 if ($Help) { Show-Help; exit 0 }
 
 function Ensure-Dir {
   param([Parameter(Mandatory=$true)][string]$Path)
-  if (-not (Test-Path -LiteralPath $Path)) {
-    New-Item -ItemType Directory -Path $Path -Force | Out-Null
-  }
+  if (-not (Test-Path -LiteralPath $Path)) { New-Item -ItemType Directory -Path $Path -Force | Out-Null }
 }
 
 function Get-ISTStamp {
@@ -90,12 +87,9 @@ function Write-Log {
     [Parameter(Mandatory=$true)][ValidateSet("Error","Warning","Info","Debug")][string]$Level,
     [Parameter(Mandatory=$true)][string]$Message
   )
-
   Ensure-Dir -Path $LogsRoot
   Ensure-Dir -Path $StateRoot
-
   Add-Content -LiteralPath $LogFile -Value "$(Get-ISTStamp) $Level $Message" -Encoding UTF8
-
   switch ($Level) {
     "Error"   { Write-Error   $Message }
     "Warning" { Write-Warning $Message }
@@ -167,7 +161,6 @@ function Add-ToUserPath {
   if ([string]::IsNullOrWhiteSpace($current)) { $current = "" }
 
   $parts = $current.Split(";") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
-
   foreach ($p in $parts) {
     if ($p.TrimEnd("\") -ieq $DirToAdd.TrimEnd("\")) {
       Write-Log Debug "USER PATH already contains: $DirToAdd"
@@ -181,23 +174,67 @@ function Add-ToUserPath {
   Write-Log Info "Open a new terminal for PATH changes to take effect."
 }
 
-function Test-Java21Present {
-  param([Parameter(Mandatory=$true)][string]$JavaExe)
-  if (-not (Test-Path -LiteralPath $JavaExe)) { return $false }
-  try {
-    $out = & $JavaExe -version 2>&1
-    $txt = ($out | Out-String)
-    return ($txt -match 'version "21\.')
-  } catch {
-    return $false
+function Ensure-Node {
+  if (Get-Command node -ErrorAction SilentlyContinue) {
+    $ver = (& node -v) 2>$null
+    if ($ver) {
+      Write-Log Info "Node already present: $ver"
+      return
+    }
   }
+
+  $nvm = Get-Command nvm -ErrorAction SilentlyContinue
+  if (-not $nvm) {
+    throw "Node not found and nvm-windows is not installed. Install nvm-windows (one-time), open a NEW terminal, then re-run this action."
+  }
+
+  Write-Log Info "Installing Node.js LTS via nvm-windows..."
+  & nvm install lts | Out-Null
+  & nvm use lts | Out-Null
+
+  if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+    throw "nvm reported success but 'node' is still not on PATH in this session. Open a new terminal and re-run."
+  }
+
+  Write-Log Info "Node ready: $((& node -v) 2>$null)"
 }
 
-function Remove-IfExists {
-  param([Parameter(Mandatory=$true)][string]$Path)
-  if (Test-Path -LiteralPath $Path) {
-    Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+function Ensure-CorepackPnpm {
+  if (-not (Get-Command corepack -ErrorAction SilentlyContinue)) {
+    throw "corepack not found. Ensure Node.js is installed correctly."
   }
+
+  Write-Log Info "Enabling Corepack..."
+  & corepack enable | Out-Null
+
+  Write-Log Info "Activating pnpm via Corepack..."
+  & corepack prepare pnpm@latest --activate | Out-Null
+
+  if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
+    throw "pnpm not found after corepack activation."
+  }
+  Write-Log Info "pnpm ready: $((& pnpm -v) 2>$null)"
+}
+
+function Pin-Caches {
+  Ensure-Dir -Path $DevRoot
+
+  $pnpmStore = Join-Path $DevRoot "cache\pnpm-store"
+  $npmCache  = Join-Path $DevRoot "cache\npm-cache"
+  $pnpmHome  = Join-Path $DevRoot "tools\pnpm"
+
+  Ensure-Dir -Path $pnpmStore
+  Ensure-Dir -Path $npmCache
+  Ensure-Dir -Path $pnpmHome
+
+  Ensure-UserEnvVar -Name "PNPM_HOME" -Value $pnpmHome
+  Add-ToUserPath -DirToAdd $pnpmHome
+
+  Write-Log Info "Pinning pnpm store dir -> $pnpmStore"
+  & pnpm config set store-dir $pnpmStore --global | Out-Null
+
+  Write-Log Info "Pinning npm cache -> $npmCache"
+  & npm config set cache $npmCache --global | Out-Null
 }
 
 # ---------------------------
@@ -227,68 +264,13 @@ $rc = 0
 $status = "success"
 
 try {
-  if (-not (Test-Path -LiteralPath "D:\")) { throw "D:\ drive not found. Repo policy expects tools on D:\." }
+  if (-not (Test-Path -LiteralPath "D:\")) { throw "D:\ drive not found. Repo policy expects logs/state on D:\." }
 
-  Ensure-Dir -Path $DevRoot
+  Ensure-Node
+  Ensure-CorepackPnpm
+  Pin-Caches
 
-  $jdkRoot     = Join-Path $DevRoot "tools\jdk\temurin-21"
-  $currentRoot = Join-Path $jdkRoot "current"
-  $javaExe     = Join-Path $currentRoot "bin\java.exe"
-
-  Ensure-Dir -Path $jdkRoot
-
-  if (-not $Force -and (Test-Java21Present -JavaExe $javaExe)) {
-    Write-Log Info "Temurin JDK 21 already present at: $currentRoot"
-  } else {
-    Write-Log Info "Ensuring Temurin JDK 21 (portable) in: $currentRoot"
-
-    $tmp = Join-Path $env:TEMP "setup-aryan-jdk21"
-    Ensure-Dir -Path $tmp
-
-    $zipPath = Join-Path $tmp "temurin-jdk21.zip"
-
-    $uri = "https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/jdk/hotspot/normal/eclipse?project=jdk"
-
-    Write-Log Info "Downloading Temurin JDK 21 ZIP..."
-    Invoke-WebRequest -Uri $uri -OutFile $zipPath -UseBasicParsing
-
-    $extract = Join-Path $tmp "extract"
-    Remove-IfExists -Path $extract
-    Ensure-Dir -Path $extract
-
-    Write-Log Info "Extracting..."
-    Expand-Archive -LiteralPath $zipPath -DestinationPath $extract -Force
-
-    $candidates = Get-ChildItem -LiteralPath $extract -Directory -ErrorAction Stop
-    $picked = $null
-    foreach ($d in $candidates) {
-      $c = Join-Path $d.FullName "bin\java.exe"
-      if (Test-Path -LiteralPath $c) { $picked = $d.FullName; break }
-    }
-    if ($null -eq $picked) {
-      throw "Extracted archive did not contain an expected JDK directory (bin\java.exe not found)."
-    }
-
-    $staging = Join-Path $jdkRoot "_staging"
-    Remove-IfExists -Path $staging
-    Ensure-Dir -Path $staging
-
-    Copy-Item -LiteralPath (Join-Path $picked "*") -Destination $staging -Recurse -Force
-
-    Remove-IfExists -Path $currentRoot
-    Move-Item -LiteralPath $staging -Destination $currentRoot -Force
-
-    if (-not (Test-Java21Present -JavaExe $javaExe)) {
-      throw "JDK install completed but Java 21 validation failed at: $javaExe"
-    }
-
-    Write-Log Info "Installed Temurin JDK 21 at: $currentRoot"
-  }
-
-  Ensure-UserEnvVar -Name "JAVA_HOME" -Value $currentRoot
-  Add-ToUserPath -DirToAdd (Join-Path $currentRoot "bin")
-
-  Write-Log Info "Done. Open a new terminal and run: java -version"
+  Write-Log Info "Done. Open a new terminal if PATH changes were applied."
 } catch {
   $rc = 1
   $status = "failed"

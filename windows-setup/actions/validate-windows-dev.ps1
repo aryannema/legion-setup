@@ -1,30 +1,28 @@
+#requires -Version 5.1
 <#
 .SYNOPSIS
-Validates the Windows-side "legion-setup" dev workstation expectations (non-destructive).
+Validates Windows dev tooling and key paths for the legion-setup workflow.
 
 .DESCRIPTION
-Checks (best-effort):
-- Running on Windows PowerShell 5.1 (version consistency rule)
-- D:\ exists (repo policy: logs/state live on D:\)
-- Required logging + state directories exist (creates them if missing; safe)
-- Staged framework exists (C:\Tools\aryan-setup\bin + actions)
-- Basic tooling presence (git, wsl) if available
-- WSL config file existence and (optionally) shows configured memory limits
+Checks:
+- D:\dev layout
+- Key env vars
+- Toolchains (python/uv/conda, node/pnpm, java)
+- VS Code presence (optional)
 
-Writes:
-- Log:   D:\aryan-setup\logs\validate-windows-dev.log
-- State: D:\aryan-setup\state-files\validate-windows-dev.state   (INI key=value, NO JSON)
-
-Idempotency:
-- If previous state indicates success, script will SKIP unless -Force is provided.
+Logging + state:
+- Logs:  D:\aryan-setup\logs\validate-windows-dev.log
+- State: D:\aryan-setup\state-files\validate-windows-dev.state
 
 .PREREQUISITES
 - Windows PowerShell 5.1
-- D:\ available (per repo storage layout)
-- Prefer running after staging: .\windows-setup\stage-aryan-setup.ps1
+- D:\ exists
 
 .PARAMETER Force
-Re-run validation even if last run succeeded.
+Re-run even if previous success.
+
+.PARAMETER DevRoot
+Root directory (default: D:\dev)
 
 .PARAMETER Help
 Show help.
@@ -42,47 +40,34 @@ param(
   [switch]$Force,
 
   [Parameter(Mandatory=$false)]
+  [string]$DevRoot = "D:\dev",
+
+  [Parameter(Mandatory=$false)]
   [switch]$Help
 )
 
 Set-StrictMode -Version 2
 $ErrorActionPreference = "Stop"
 
-function Show-Help {
-  Get-Help -Detailed $MyInvocation.MyCommand.Path
-}
+$ActionName = "validate-windows-dev"
+$Version    = "1.1.0"
 
+$LogsRoot  = "D:\aryan-setup\logs"
+$StateRoot = "D:\aryan-setup\state-files"
+$LogFile   = Join-Path $LogsRoot  "$ActionName.log"
+$StateFile = Join-Path $StateRoot "$ActionName.state"
+
+function Show-Help { Get-Help -Detailed $MyInvocation.MyCommand.Path }
 if ($Help) { Show-Help; exit 0 }
 
-# ---------------------------
-# Constants
-# ---------------------------
-$ActionName = "validate-windows-dev"
-$LogsRoot   = "D:\aryan-setup\logs"
-$StateRoot  = "D:\aryan-setup\state-files"
-$StateFile  = Join-Path $StateRoot "$ActionName.state"
-$LogPath    = Join-Path $LogsRoot  "$ActionName.log"
-
-$StagedRoot   = "C:\Tools\aryan-setup"
-$StagedBin    = Join-Path $StagedRoot "bin"
-$StagedActions= Join-Path $StagedRoot "actions"
-$WslConfig    = Join-Path $env:USERPROFILE ".wslconfig"
-
-# ---------------------------
-# Logging helpers
-# ---------------------------
-function Get-TzOffsetString {
-  $offset = [System.TimeZoneInfo]::Local.GetUtcOffset([DateTime]::Now)
-  $sign = if ($offset.TotalMinutes -ge 0) { "+" } else { "-" }
-  $hh = [Math]::Abs([int]$offset.Hours).ToString("00")
-  $mm = [Math]::Abs([int]$offset.Minutes).ToString("00")
-  return "$sign$hh`:$mm"
-}
-
 function Get-Stamp {
-  $tz = Get-TzOffsetString
-  $dt = Get-Date
-  return ("{0} {1}" -f $tz, $dt.ToString("dd-MM-yyyy HH:mm:ss"))
+  try {
+    $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById("India Standard Time")
+    $dt = [System.TimeZoneInfo]::ConvertTime((Get-Date), $tz)
+    return ("IST {0}" -f $dt.ToString("dd-MM-yyyy HH:mm:ss"))
+  } catch {
+    return ("IST {0}" -f (Get-Date).ToString("dd-MM-yyyy HH:mm:ss"))
+  }
 }
 
 function Ensure-Dir {
@@ -92,13 +77,14 @@ function Ensure-Dir {
   }
 }
 
-function Write-LogLine {
+function Write-Log {
   param(
     [Parameter(Mandatory=$true)][ValidateSet("Error","Warning","Info","Debug")][string]$Level,
     [Parameter(Mandatory=$true)][string]$Message
   )
-  $line = "{0} {1} {2}" -f (Get-Stamp), $Level, $Message
-  Add-Content -LiteralPath $LogPath -Value $line -Encoding UTF8
+  Ensure-Dir -Path $LogsRoot
+  Ensure-Dir -Path $StateRoot
+  Add-Content -LiteralPath $LogFile -Value "$(Get-Stamp) $Level $Message" -Encoding UTF8
   switch ($Level) {
     "Error"   { Write-Error   $Message }
     "Warning" { Write-Warning $Message }
@@ -107,15 +93,12 @@ function Write-LogLine {
   }
 }
 
-# ---------------------------
-# State helpers (key=value; NO JSON)
-# ---------------------------
-function Read-State {
-  param([Parameter(Mandatory=$true)][string]$Path)
-  if (-not (Test-Path -LiteralPath $Path)) { return $null }
+function Get-ISO8601 { (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssK") }
 
+function Read-State {
+  if (-not (Test-Path -LiteralPath $StateFile)) { return $null }
   $map = @{}
-  $lines = Get-Content -LiteralPath $Path -ErrorAction Stop
+  $lines = Get-Content -LiteralPath $StateFile -ErrorAction Stop
   foreach ($ln in $lines) {
     if ([string]::IsNullOrWhiteSpace($ln)) { continue }
     if ($ln.TrimStart().StartsWith("#")) { continue }
@@ -130,178 +113,86 @@ function Read-State {
 
 function Write-State {
   param(
-    [Parameter(Mandatory=$true)][string]$Path,
-    [Parameter(Mandatory=$true)][hashtable]$Fields
+    [Parameter(Mandatory=$true)][string]$Status,
+    [Parameter(Mandatory=$true)][int]$Rc,
+    [Parameter(Mandatory=$true)][string]$StartedAt,
+    [Parameter(Mandatory=$true)][string]$FinishedAt
   )
 
-  $content = @()
-  $content += "action=$($Fields.action)"
-  $content += "status=$($Fields.status)"
-  $content += "rc=$($Fields.rc)"
-  $content += "started_at=$($Fields.started_at)"
-  $content += "finished_at=$($Fields.finished_at)"
-  $content += "user=$($Fields.user)"
-  $content += "host=$($Fields.host)"
-  $content += "log_path=$($Fields.log_path)"
-  $content += "version=$($Fields.version)"
+  $fields = @()
+  $fields += "action=$ActionName"
+  $fields += "status=$Status"
+  $fields += "rc=$Rc"
+  $fields += "started_at=$StartedAt"
+  $fields += "finished_at=$FinishedAt"
+  $fields += "user=$([Environment]::UserName)"
+  $fields += "host=$($env:COMPUTERNAME)"
+  $fields += "log_path=$LogFile"
+  $fields += "version=$Version"
 
-  $tmp = "$Path.tmp"
-  Set-Content -LiteralPath $tmp -Value $content -Encoding UTF8
-  Move-Item -LiteralPath $tmp -Destination $Path -Force
+  $tmp = "$StateFile.tmp"
+  Set-Content -LiteralPath $tmp -Value $fields -Encoding UTF8
+  Move-Item -LiteralPath $tmp -Destination $StateFile -Force
 }
 
-function Get-ISO8601 {
-  (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssK")
-}
-
-function Get-Version {
-  # Simple, stable string for now. If you add VERSION file later, this can read it.
-  return "1.0.0"
+function Test-Cmd([string]$name) {
+  return [bool](Get-Command $name -ErrorAction SilentlyContinue)
 }
 
 # ---------------------------
-# Begin
+# Main
 # ---------------------------
+$startedAt = Get-ISO8601
 Ensure-Dir -Path $LogsRoot
 Ensure-Dir -Path $StateRoot
 
-$StartedAt = Get-ISO8601
-$UserName  = [Environment]::UserName
-$HostName  = $env:COMPUTERNAME
-$Version   = Get-Version
+Write-Log Info "Starting: $ActionName (version=$Version, Force=$Force, DevRoot=$DevRoot)"
 
-Write-LogLine -Level Info -Message "Starting validation: $ActionName"
-Write-LogLine -Level Info -Message "Force: $Force"
-Write-LogLine -Level Info -Message "LogsRoot: $LogsRoot"
-Write-LogLine -Level Info -Message "StateRoot: $StateRoot"
-
-# Idempotency: if last success and not forced, skip
 try {
-  $prev = Read-State -Path $StateFile
+  $prev = Read-State
   if ($prev -ne $null -and -not $Force) {
     if ($prev.ContainsKey("status") -and $prev["status"] -eq "success") {
-      Write-LogLine -Level Info -Message "Previous state was success; skipping. Use -Force to re-run."
-      $FinishedAt = Get-ISO8601
-      Write-State -Path $StateFile -Fields @{
-        action      = $ActionName
-        status      = "skipped"
-        rc          = 0
-        started_at  = $StartedAt
-        finished_at = $FinishedAt
-        user        = $UserName
-        host        = $HostName
-        log_path    = $LogPath
-        version     = $Version
-      }
+      Write-Log Info "State indicates previous success; skipping. Use -Force to re-run."
+      Write-State -Status "skipped" -Rc 0 -StartedAt $startedAt -FinishedAt (Get-ISO8601)
       exit 0
     }
   }
 } catch {
-  Write-LogLine -Level Warning -Message "Could not read previous state (continuing): $($_.Exception.Message)"
+  Write-Log Warning "Could not read prior state (continuing): $($_.Exception.Message)"
 }
 
 $rc = 0
 $status = "success"
 
 try {
-  # 1) D:\ presence
-  if (-not (Test-Path -LiteralPath "D:\")) {
-    throw "D:\ not found. Repo policy expects logs/state on D:\ (verify disk layout / drive letters)."
-  }
-  Write-LogLine -Level Info -Message "D:\ detected."
+  if (-not (Test-Path -LiteralPath "D:\")) { throw "D:\ drive not found." }
 
-  # 2) PowerShell version (must be 5.1)
-  $psv = $PSVersionTable.PSVersion
-  $psStr = "{0}.{1}.{2}.{3}" -f $psv.Major, $psv.Minor, $psv.Build, $psv.Revision
-  Write-LogLine -Level Info -Message "PowerShell version: $psStr"
-  if (-not ($psv.Major -eq 5 -and $psv.Minor -eq 1)) {
-    throw "PowerShell version mismatch. Expected Windows PowerShell 5.1, got: $psStr"
-  }
-
-  # 3) Staged framework
-  if (-not (Test-Path -LiteralPath $StagedRoot)) {
-    Write-LogLine -Level Warning -Message "Staged root not found: $StagedRoot (run windows-setup\stage-aryan-setup.ps1)"
-  } else {
-    Write-LogLine -Level Info -Message "Staged root present: $StagedRoot"
-  }
-
-  if (-not (Test-Path -LiteralPath $StagedBin)) {
-    Write-LogLine -Level Warning -Message "Staged bin missing: $StagedBin"
-  } else {
-    Write-LogLine -Level Info -Message "Staged bin present: $StagedBin"
-  }
-
-  if (-not (Test-Path -LiteralPath $StagedActions)) {
-    Write-LogLine -Level Warning -Message "Staged actions missing: $StagedActions"
-  } else {
-    Write-LogLine -Level Info -Message "Staged actions present: $StagedActions"
-  }
-
-  # 4) Tooling (best-effort)
-  try {
-    $git = Get-Command git -ErrorAction Stop
-    Write-LogLine -Level Info -Message "git: OK ($($git.Source))"
-  } catch {
-    Write-LogLine -Level Warning -Message "git not found in PATH (recommended)."
-  }
-
-  try {
-    $wsl = Get-Command wsl -ErrorAction Stop
-    Write-LogLine -Level Info -Message "wsl: OK ($($wsl.Source))"
-    # If WSL exists, try to show distro list (non-fatal)
-    try {
-      $out = & $wsl.Source --list --verbose 2>$null
-      if ($LASTEXITCODE -eq 0 -and $out) {
-        Write-LogLine -Level Info -Message "WSL distros (wsl --list --verbose):"
-        foreach ($ln in $out) { Write-LogLine -Level Info -Message ("  " + $ln) }
-      }
-    } catch { }
-  } catch {
-    Write-LogLine -Level Warning -Message "wsl not found (if you plan WSL2, install/enable it)."
-  }
-
-  # 5) .wslconfig (informational)
-  if (Test-Path -LiteralPath $WslConfig) {
-    Write-LogLine -Level Info -Message ".wslconfig found: $WslConfig"
-    try {
-      $cfg = Get-Content -LiteralPath $WslConfig -ErrorAction Stop
-      # Print a small subset for visibility (safe)
-      Write-LogLine -Level Info -Message ".wslconfig (first 40 lines):"
-      $i = 0
-      foreach ($ln in $cfg) {
-        $i++
-        Write-LogLine -Level Info -Message ("  " + $ln)
-        if ($i -ge 40) { break }
-      }
-    } catch {
-      Write-LogLine -Level Warning -Message "Could not read .wslconfig: $($_.Exception.Message)"
+  # Layout checks
+  $expected = @("repos","tools","envs","cache","tmp") | ForEach-Object { Join-Path $DevRoot $_ }
+  foreach ($p in $expected) {
+    if (-not (Test-Path -LiteralPath $p)) {
+      Write-Log Warning "Missing: $p (run: setup-aryan prepare-windows-dev-dirs)"
+    } else {
+      Write-Log Info "OK: $p"
     }
-  } else {
-    Write-LogLine -Level Warning -Message ".wslconfig not found at $WslConfig (optional, but recommended to cap WSL memory)."
   }
 
-  Write-LogLine -Level Info -Message "Validation completed."
+  # Toolchain checks
+  Write-Log Info ("python present: " + (Test-Cmd "python"))
+  Write-Log Info ("uv present: " + (Test-Cmd "uv"))
+  Write-Log Info ("conda present: " + (Test-Cmd "conda"))
+  Write-Log Info ("node present: " + (Test-Cmd "node"))
+  Write-Log Info ("pnpm present: " + (Test-Cmd "pnpm"))
+  Write-Log Info ("java present: " + (Test-Cmd "java"))
+  Write-Log Info ("code present: " + (Test-Cmd "code"))
+
+  Write-Log Info "Validation complete."
 } catch {
   $rc = 1
   $status = "failed"
-  Write-LogLine -Level Error -Message "Validation failed: $($_.Exception.Message)"
+  Write-Log Error $_.Exception.Message
 }
 
-$FinishedAt = Get-ISO8601
-try {
-  Write-State -Path $StateFile -Fields @{
-    action      = $ActionName
-    status      = $status
-    rc          = $rc
-    started_at  = $StartedAt
-    finished_at = $FinishedAt
-    user        = $UserName
-    host        = $HostName
-    log_path    = $LogPath
-    version     = $Version
-  }
-} catch {
-  Write-LogLine -Level Warning -Message "Failed to write state file: $($_.Exception.Message)"
-}
-
+$finishedAt = Get-ISO8601
+try { Write-State -Status $status -Rc $rc -StartedAt $startedAt -FinishedAt $finishedAt } catch { Write-Log Warning "Failed to write state file: $($_.Exception.Message)" }
 exit $rc

@@ -1,3 +1,4 @@
+#requires -Version 5.1
 <#
 .SYNOPSIS
 Creates the recommended Windows dev directory layout on D:\ and sets key USER env vars (idempotent).
@@ -5,43 +6,24 @@ Creates the recommended Windows dev directory layout on D:\ and sets key USER en
 .DESCRIPTION
 Creates (if missing) the repo’s preferred folder structure so C:\ stays clean:
 - D:\dev\repos, tools, envs, cache, tmp
-- D:\apps
-- D:\profiles\Chrome\UserData and D:\profiles\Chrome\Cache
-- (optional) D:\WSL\ and D:\DockerDesktop\ placeholders
+- D:\dev\datasets (optional placeholder)
 
-Also sets USER environment variables (idempotent):
-- GRADLE_USER_HOME = D:\dev\cache\gradle
-- ANDROID_AVD_HOME = D:\dev\envs\Android\.android\avd
-
-Optionally creates/updates .wslconfig under the user profile:
-- If .wslconfig doesn't exist: it will be created with conservative defaults.
-- If -Force is used: existing .wslconfig is backed up and then replaced.
+Also creates:
+- Logs:  D:\aryan-setup\logs\
+- State: D:\aryan-setup\state-files\   (INI-style key=value .state files; NO JSON)
 
 Writes:
-- Log:   D:\aryan-setup\logs\prepare-windows-dev-dirs.log
-- State: D:\aryan-setup\state-files\prepare-windows-dev-dirs.state   (INI key=value, NO JSON)
-
-Idempotency:
-- If previous state indicates success, script will SKIP unless -Force is provided.
+- D:\aryan-setup\state-files\prepare-windows-dev-dirs.state
 
 .PREREQUISITES
 - Windows PowerShell 5.1
-- D:\ drive exists (per repo storage layout)
+- D:\ drive exists
 
 .PARAMETER Force
-Re-run even if last run succeeded. Also allows overwriting .wslconfig (with backup).
+Re-run even if prior state indicates success.
 
-.PARAMETER CreateWslConfig
-Create/ensure .wslconfig with recommended defaults (default: enabled).
-
-.PARAMETER WslMemoryGB
-Memory limit for WSL2 in GB (default: 6). Only used when creating/overwriting .wslconfig.
-
-.PARAMETER WslProcessors
-CPU cores limit for WSL2 (default: 6). Only used when creating/overwriting .wslconfig.
-
-.PARAMETER WslSwapGB
-Swap size for WSL2 in GB (default: 4). Only used when creating/overwriting .wslconfig.
+.PARAMETER DevRoot
+Root directory (default D:\dev).
 
 .PARAMETER Help
 Show help.
@@ -51,9 +33,6 @@ setup-aryan prepare-windows-dev-dirs
 
 .EXAMPLE
 setup-aryan prepare-windows-dev-dirs -Force
-
-.EXAMPLE
-setup-aryan prepare-windows-dev-dirs -WslMemoryGB 8 -WslProcessors 8
 #>
 
 [CmdletBinding()]
@@ -62,16 +41,7 @@ param(
   [switch]$Force,
 
   [Parameter(Mandatory=$false)]
-  [switch]$CreateWslConfig = $true,
-
-  [Parameter(Mandatory=$false)]
-  [int]$WslMemoryGB = 6,
-
-  [Parameter(Mandatory=$false)]
-  [int]$WslProcessors = 6,
-
-  [Parameter(Mandatory=$false)]
-  [int]$WslSwapGB = 4,
+  [string]$DevRoot = "D:\dev",
 
   [Parameter(Mandatory=$false)]
   [switch]$Help
@@ -80,56 +50,25 @@ param(
 Set-StrictMode -Version 2
 $ErrorActionPreference = "Stop"
 
+$ActionName = "prepare-windows-dev-dirs"
+$Version    = "1.1.0"
+
+$LogsRoot  = "D:\aryan-setup\logs"
+$StateRoot = "D:\aryan-setup\state-files"
+$LogFile   = Join-Path $LogsRoot  "$ActionName.log"
+$StateFile = Join-Path $StateRoot "$ActionName.state"
+
 function Show-Help { Get-Help -Detailed $MyInvocation.MyCommand.Path }
 if ($Help) { Show-Help; exit 0 }
 
-# ---------------------------
-# Constants
-# ---------------------------
-$ActionName = "prepare-windows-dev-dirs"
-$LogsRoot   = "D:\aryan-setup\logs"
-$StateRoot  = "D:\aryan-setup\state-files"
-$StateFile  = Join-Path $StateRoot "$ActionName.state"
-$LogPath    = Join-Path $LogsRoot  "$ActionName.log"
-
-# Recommended structure
-$DirsToEnsure = @(
-  "D:\dev\repos",
-  "D:\dev\tools",
-  "D:\dev\envs",
-  "D:\dev\cache",
-  "D:\dev\tmp",
-  "D:\apps",
-  "D:\profiles\Chrome\UserData",
-  "D:\profiles\Chrome\Cache",
-  "D:\WSL",
-  "D:\WSL\backup",
-  "D:\DockerDesktop"
-)
-
-# User env vars to ensure
-$UserEnvTargets = @(
-  @{ Name="GRADLE_USER_HOME"; Value="D:\dev\cache\gradle" },
-  @{ Name="ANDROID_AVD_HOME"; Value="D:\dev\envs\Android\.android\avd" }
-)
-
-$WslConfigPath = Join-Path $env:USERPROFILE ".wslconfig"
-
-# ---------------------------
-# Logging helpers
-# ---------------------------
-function Get-TzOffsetString {
-  $offset = [System.TimeZoneInfo]::Local.GetUtcOffset([DateTime]::Now)
-  $sign = if ($offset.TotalMinutes -ge 0) { "+" } else { "-" }
-  $hh = [Math]::Abs([int]$offset.Hours).ToString("00")
-  $mm = [Math]::Abs([int]$offset.Minutes).ToString("00")
-  return "$sign$hh`:$mm"
-}
-
 function Get-Stamp {
-  $tz = Get-TzOffsetString
-  $dt = Get-Date
-  return ("{0} {1}" -f $tz, $dt.ToString("dd-MM-yyyy HH:mm:ss"))
+  try {
+    $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById("India Standard Time")
+    $dt = [System.TimeZoneInfo]::ConvertTime((Get-Date), $tz)
+    return ("IST {0}" -f $dt.ToString("dd-MM-yyyy HH:mm:ss"))
+  } catch {
+    return ("IST {0}" -f (Get-Date).ToString("dd-MM-yyyy HH:mm:ss"))
+  }
 }
 
 function Ensure-Dir {
@@ -144,8 +83,9 @@ function Write-Log {
     [Parameter(Mandatory=$true)][ValidateSet("Error","Warning","Info","Debug")][string]$Level,
     [Parameter(Mandatory=$true)][string]$Message
   )
-  $line = "{0} {1} {2}" -f (Get-Stamp), $Level, $Message
-  Add-Content -LiteralPath $LogPath -Value $line -Encoding UTF8
+  Ensure-Dir -Path $LogsRoot
+  Ensure-Dir -Path $StateRoot
+  Add-Content -LiteralPath $LogFile -Value "$(Get-Stamp) $Level $Message" -Encoding UTF8
   switch ($Level) {
     "Error"   { Write-Error   $Message }
     "Warning" { Write-Warning $Message }
@@ -154,14 +94,12 @@ function Write-Log {
   }
 }
 
-# ---------------------------
-# State helpers (key=value; NO JSON)
-# ---------------------------
+function Get-ISO8601 { (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssK") }
+
 function Read-State {
-  param([Parameter(Mandatory=$true)][string]$Path)
-  if (-not (Test-Path -LiteralPath $Path)) { return $null }
+  if (-not (Test-Path -LiteralPath $StateFile)) { return $null }
   $map = @{}
-  $lines = Get-Content -LiteralPath $Path -ErrorAction Stop
+  $lines = Get-Content -LiteralPath $StateFile -ErrorAction Stop
   foreach ($ln in $lines) {
     if ([string]::IsNullOrWhiteSpace($ln)) { continue }
     if ($ln.TrimStart().StartsWith("#")) { continue }
@@ -176,204 +114,90 @@ function Read-State {
 
 function Write-State {
   param(
-    [Parameter(Mandatory=$true)][string]$Path,
-    [Parameter(Mandatory=$true)][hashtable]$Fields
+    [Parameter(Mandatory=$true)][string]$Status,
+    [Parameter(Mandatory=$true)][int]$Rc,
+    [Parameter(Mandatory=$true)][string]$StartedAt,
+    [Parameter(Mandatory=$true)][string]$FinishedAt
   )
-  $content = @()
-  $content += "action=$($Fields.action)"
-  $content += "status=$($Fields.status)"
-  $content += "rc=$($Fields.rc)"
-  $content += "started_at=$($Fields.started_at)"
-  $content += "finished_at=$($Fields.finished_at)"
-  $content += "user=$($Fields.user)"
-  $content += "host=$($Fields.host)"
-  $content += "log_path=$($Fields.log_path)"
-  $content += "version=$($Fields.version)"
 
-  $tmp = "$Path.tmp"
-  Set-Content -LiteralPath $tmp -Value $content -Encoding UTF8
-  Move-Item -LiteralPath $tmp -Destination $Path -Force
+  $fields = @()
+  $fields += "action=$ActionName"
+  $fields += "status=$Status"
+  $fields += "rc=$Rc"
+  $fields += "started_at=$StartedAt"
+  $fields += "finished_at=$FinishedAt"
+  $fields += "user=$([Environment]::UserName)"
+  $fields += "host=$($env:COMPUTERNAME)"
+  $fields += "log_path=$LogFile"
+  $fields += "version=$Version"
+
+  $tmp = "$StateFile.tmp"
+  Set-Content -LiteralPath $tmp -Value $fields -Encoding UTF8
+  Move-Item -LiteralPath $tmp -Destination $StateFile -Force
 }
 
-function Get-ISO8601 { (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssK") }
-function Get-Version { return "1.0.0" }
-
-# ---------------------------
-# Helpers: env vars
-# ---------------------------
 function Ensure-UserEnvVar {
-  param(
-    [Parameter(Mandatory=$true)][string]$Name,
-    [Parameter(Mandatory=$true)][string]$Value
-  )
-  $current = [Environment]::GetEnvironmentVariable($Name, "User")
-  if ([string]::IsNullOrWhiteSpace($current)) {
+  param([Parameter(Mandatory=$true)][string]$Name, [Parameter(Mandatory=$true)][string]$Value)
+  $cur = [Environment]::GetEnvironmentVariable($Name, "User")
+  if ($cur -ne $Value) {
     [Environment]::SetEnvironmentVariable($Name, $Value, "User")
-    Write-Log -Level Info -Message "Set USER env var: $Name=$Value"
-    return
-  }
-
-  if ($current -ne $Value) {
-    if ($Force) {
-      [Environment]::SetEnvironmentVariable($Name, $Value, "User")
-      Write-Log -Level Info -Message "Updated USER env var (Force): $Name=$Value (was: $current)"
-    } else {
-      Write-Log -Level Warning -Message "USER env var differs (not changing without -Force): $Name (current: $current, desired: $Value)"
-    }
+    Write-Log Info "Set USER env var: $Name=$Value"
   } else {
-    Write-Log -Level Debug -Message "USER env var already set: $Name=$Value"
+    Write-Log Debug "USER env var already set: $Name=$Value"
   }
 }
 
 # ---------------------------
-# Helpers: .wslconfig
+# Main
 # ---------------------------
-function Build-WslConfigContent {
-  param(
-    [Parameter(Mandatory=$true)][int]$MemGB,
-    [Parameter(Mandatory=$true)][int]$Cpu,
-    [Parameter(Mandatory=$true)][int]$SwapGBLocal
-  )
-
-  if ($MemGB -lt 1) { $MemGB = 6 }
-  if ($Cpu -lt 1)   { $Cpu = 6 }
-  if ($SwapGBLocal -lt 0) { $SwapGBLocal = 4 }
-
-@"
-[wsl2]
-memory=${MemGB}GB
-processors=$Cpu
-swap=${SwapGBLocal}GB
-"@
-}
-
-function Ensure-WslConfig {
-  $content = Build-WslConfigContent -MemGB $WslMemoryGB -Cpu $WslProcessors -SwapGBLocal $WslSwapGB
-
-  if (-not (Test-Path -LiteralPath $WslConfigPath)) {
-    Set-Content -LiteralPath $WslConfigPath -Value $content -Encoding ASCII
-    Write-Log -Level Info -Message "Created .wslconfig at $WslConfigPath"
-    return
-  }
-
-  # Exists
-  $existing = ""
-  try { $existing = Get-Content -LiteralPath $WslConfigPath -Raw -ErrorAction Stop } catch { $existing = "" }
-
-  if ($existing -eq $content) {
-    Write-Log -Level Debug -Message ".wslconfig already matches desired content."
-    return
-  }
-
-  if (-not $Force) {
-    Write-Log -Level Warning -Message ".wslconfig exists and differs. Not changing without -Force. Path: $WslConfigPath"
-    return
-  }
-
-  # Force overwrite with backup
-  $ts = (Get-Date).ToString("yyyyMMdd-HHmmss")
-  $bak = "$WslConfigPath.bak.$ts"
-  Copy-Item -LiteralPath $WslConfigPath -Destination $bak -Force
-  Set-Content -LiteralPath $WslConfigPath -Value $content -Encoding ASCII
-  Write-Log -Level Info -Message "Backed up existing .wslconfig to: $bak"
-  Write-Log -Level Info -Message "Overwrote .wslconfig (Force) with desired limits."
-}
-
-# ---------------------------
-# Begin
-# ---------------------------
-if (-not (Test-Path -LiteralPath "D:\")) {
-  Write-Error "D:\ drive not found. Repo policy expects logs/state on D:\."
-  exit 1
-}
-
+$startedAt = Get-ISO8601
 Ensure-Dir -Path $LogsRoot
 Ensure-Dir -Path $StateRoot
 
-$StartedAt = Get-ISO8601
-$UserName  = [Environment]::UserName
-$HostName  = $env:COMPUTERNAME
-$Version   = Get-Version
+Write-Log Info "Starting: $ActionName (version=$Version, Force=$Force, DevRoot=$DevRoot)"
 
-Write-Log -Level Info -Message "Starting: $ActionName"
-Write-Log -Level Info -Message "Force: $Force"
-
-# Idempotency: if last success and not forced, skip
 try {
-  $prev = Read-State -Path $StateFile
+  $prev = Read-State
   if ($prev -ne $null -and -not $Force) {
     if ($prev.ContainsKey("status") -and $prev["status"] -eq "success") {
-      Write-Log -Level Info -Message "Previous state was success; skipping. Use -Force to re-run."
-      $FinishedAt = Get-ISO8601
-      Write-State -Path $StateFile -Fields @{
-        action      = $ActionName
-        status      = "skipped"
-        rc          = 0
-        started_at  = $StartedAt
-        finished_at = $FinishedAt
-        user        = $UserName
-        host        = $HostName
-        log_path    = $LogPath
-        version     = $Version
-      }
+      Write-Log Info "State indicates previous success; skipping. Use -Force to re-run."
+      Write-State -Status "skipped" -Rc 0 -StartedAt $startedAt -FinishedAt (Get-ISO8601)
       exit 0
     }
   }
 } catch {
-  Write-Log -Level Warning -Message "Could not read previous state (continuing): $($_.Exception.Message)"
+  Write-Log Warning "Could not read prior state (continuing): $($_.Exception.Message)"
 }
 
 $rc = 0
 $status = "success"
 
 try {
-  # Create directories
-  foreach ($d in $DirsToEnsure) {
-    Ensure-Dir -Path $d
-    Write-Log -Level Debug -Message "Ensured dir: $d"
-  }
-  Write-Log -Level Info -Message "Directory layout ensured on D:\."
+  if (-not (Test-Path -LiteralPath "D:\")) { throw "D:\ drive not found." }
 
-  # Ensure extra cache dirs
-  Ensure-Dir -Path "D:\dev\cache\gradle"
-  Ensure-Dir -Path "D:\dev\envs\Android\.android\avd"
+  Ensure-Dir -Path $DevRoot
 
-  # Set USER env vars (non-admin)
-  foreach ($item in $UserEnvTargets) {
-    Ensure-UserEnvVar -Name $item.Name -Value $item.Value
-  }
+  $dirs = @(
+    (Join-Path $DevRoot "repos"),
+    (Join-Path $DevRoot "tools"),
+    (Join-Path $DevRoot "envs"),
+    (Join-Path $DevRoot "cache"),
+    (Join-Path $DevRoot "tmp"),
+    (Join-Path $DevRoot "datasets")
+  )
 
-  # .wslconfig
-  if ($CreateWslConfig) {
-    Ensure-WslConfig
-    Write-Log -Level Info -Message "WSL config check complete."
-    Write-Log -Level Info -Message "If you changed .wslconfig, run: wsl --shutdown"
-  } else {
-    Write-Log -Level Info -Message "CreateWslConfig not set; skipping .wslconfig management."
-  }
+  foreach ($d in $dirs) { Ensure-Dir -Path $d }
 
-  Write-Log -Level Info -Message "Done."
+  # Useful defaults for parity
+  Ensure-UserEnvVar -Name "DEV_ROOT" -Value $DevRoot
+
+  Write-Log Info "Created/verified dev dirs under: $DevRoot"
 } catch {
   $rc = 1
   $status = "failed"
-  Write-Log -Level Error -Message "Failed: $($_.Exception.Message)"
+  Write-Log Error $_.Exception.Message
 }
 
-$FinishedAt = Get-ISO8601
-try {
-  Write-State -Path $StateFile -Fields @{
-    action      = $ActionName
-    status      = $status
-    rc          = $rc
-    started_at  = $StartedAt
-    finished_at = $FinishedAt
-    user        = $UserName
-    host        = $HostName
-    log_path    = $LogPath
-    version     = $Version
-  }
-} catch {
-  Write-Log -Level Warning -Message "Failed to write state file: $($_.Exception.Message)"
-}
-
+$finishedAt = Get-ISO8601
+try { Write-State -Status $status -Rc $rc -StartedAt $startedAt -FinishedAt $finishedAt } catch { Write-Log Warning "Failed to write state file: $($_.Exception.Message)" }
 exit $rc

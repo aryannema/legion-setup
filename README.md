@@ -86,7 +86,7 @@ This repo’s `setup-aryan` actions must follow these invariants so you can safe
 **Linux (run from repo root):**
 ```bash
 sudo bash ./linux-setup/stage-aryan-setup.sh
-````
+```
 
 **Windows (run from repo root in an elevated PowerShell):**
 
@@ -98,6 +98,152 @@ After staging:
 
 * Linux: `setup-aryan list`, `setup-aryan recover-linux-gui-igpu-deb`, `setup-aryan validate-linux-gpu`
 * Windows: `setup-aryan list` (more actions can be added under `windows-setup/actions/`)
+
+### How to use the staged scripts (added)
+
+This is the day-to-day workflow once staging is done: you **list** actions, **run** the one you need, and use **logs + state-files** to confirm what happened.
+
+#### A) Find what actions exist
+
+**Linux:**
+
+```bash
+setup-aryan list
+```
+
+**Windows (PowerShell 5.1):**
+
+```powershell
+setup-aryan list
+```
+
+If `setup-aryan` isn’t found right after staging:
+
+* **Linux:** open a new terminal (or run `hash -r`), then retry `setup-aryan list`.
+* **Windows:** open a new PowerShell window, then retry. If you still want to run it explicitly by path, use:
+
+  ```powershell
+  & "C:\Tools\aryan-setup\bin\setup-aryan.ps1" list
+  ```
+
+#### B) Run an action (normal vs force)
+
+**Normal run**: if the action already succeeded before, it should skip (idempotent behavior).
+
+**Linux (bash):**
+
+```bash
+setup-aryan <action-name>
+# force rerun (even if it previously succeeded)
+setup-aryan <action-name> --force
+```
+
+**Windows (PowerShell 5.1):**
+
+```powershell
+setup-aryan <action-name>
+# force rerun (even if it previously succeeded)
+setup-aryan <action-name> -Force
+```
+
+> Tip: you don’t need to remember action names — `setup-aryan list` is the source of truth, and you copy-paste from there.
+
+#### C) Get help/usage for the wrapper and for a specific action
+
+Different repos implement this slightly differently, but the contract in this repo is that scripts expose usage/help. Try these in order:
+
+**Linux:**
+
+```bash
+setup-aryan --help || setup-aryan help || true
+setup-aryan <action-name> --help || true
+```
+
+**Windows:**
+
+```powershell
+setup-aryan -Help
+setup-aryan <action-name> -Help
+```
+
+#### D) Check logs (what happened, and why)
+
+Logs are always written to the OS-specific logs directory:
+
+* **Linux logs:** `/var/log/setup-aryan/`
+* **Windows logs:** `D:\aryan-setup\logs\`
+
+Quick ways to inspect recent logs:
+
+**Linux:**
+
+```bash
+ls -lt /var/log/setup-aryan/ | head
+# then open/tail whichever log file is newest
+# (filename depends on action)
+```
+
+**Windows:**
+
+```powershell
+Get-ChildItem "D:\aryan-setup\logs" | Sort-Object LastWriteTime -Descending | Select-Object -First 10
+# then open the newest log file
+```
+
+If you’re using the log wrapper (staged under `bin/`):
+
+* Linux: `setup-aryan-log ...`
+* Windows: `setup-aryan-log ...`
+  (Use `setup-aryan-log --help` / `setup-aryan-log -Help` to see how it’s implemented in your repo.)
+
+#### E) Check state-files (did it succeed? did it skip?)
+
+State-files are the “truth record” for idempotency and re-runs:
+
+* **Linux state-files:** `/var/log/setup-aryan/state-files/`
+* **Windows state-files:** `D:\aryan-setup\state-files\`
+
+Common checks:
+
+**Linux:**
+
+```bash
+ls -lt /var/log/setup-aryan/state-files/ | head
+cat /var/log/setup-aryan/state-files/<action>.state
+```
+
+**Windows:**
+
+```powershell
+Get-ChildItem "D:\aryan-setup\state-files" | Sort-Object LastWriteTime -Descending | Select-Object -First 10
+Get-Content "D:\aryan-setup\state-files\<action>.state"
+```
+
+Interpretation rule:
+
+* `status=success` → action completed successfully.
+* `status=skipped` → it was already in the desired end-state and safely did nothing.
+* `status=failed` → check `log_path=` inside the state-file and open that log.
+
+#### F) Updating the repo scripts and restaging safely
+
+When you pull new changes from GitHub (or you edit actions locally), restage to refresh the staged framework:
+
+**Linux (from repo root):**
+
+```bash
+git pull
+sudo bash ./linux-setup/stage-aryan-setup.sh
+```
+
+**Windows (from repo root, elevated PowerShell):**
+
+```powershell
+git pull
+powershell -ExecutionPolicy Bypass -File .\windows-setup\stage-aryan-setup.ps1
+```
+
+This is designed to be safe to run repeatedly (idempotent staging).
 
 ---
 
@@ -303,14 +449,19 @@ Tuning:
 
 * Daily: 4–6GB
 * Heavy tasks: 8–10GB temporarily → then reduce again
+
 ---
+
 ## 5.2) WSL 2 Optimization, Migration, and Physical Disk Mounting
+
 ### 5.2.1) Global Configuration (.wslconfig)
+
 To configure resource limits globally for all WSL 2 distributions, the .wslconfig file must be placed in the Windows User Profile directory.
 Path: `%UserProfile%\.wslconfig` (e.g., `C:\Users\<YourName>\.wslconfig`)
 Application: Run `wsl --shutdown` in PowerShell to apply changes.
 ###5.2.2 Relocating WSL Distribution to D: Drive
 To move the Ubuntu installation from the C: drive to the D: drive to manage storage effectively:
+
 ```powershell
 # 1. Export the current distribution to a temporary tarball
 wsl --export Ubuntu D:\WSL\backup\Ubuntu.tar
@@ -326,7 +477,9 @@ wsl --import Ubuntu D:\WSL\Ubuntu D:\WSL\backup\Ubuntu.tar --version 2
 wsl --set-default Ubuntu
 Use code with caution.
 ```
+
 To verify the registration path, the following PowerShell command queries the Windows Registry:
+
 ```powershell
 Get-ChildItem -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss" | 
     ForEach-Object { Get-ItemProperty -Path $_.PSPath } | 
@@ -334,7 +487,9 @@ Get-ChildItem -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss" |
 ```
 
 ### 5.2.3) Verifying Distribution and OS Version
+
 To inspect the internal Linux OS version (e.g., Ubuntu 22.04) without an interactive login:
+
 ```powershell
 # Check WSL Architecture version
 wsl -l -v
@@ -344,8 +499,10 @@ wsl -d Ubuntu cat /etc/os-release
 ```
 
 ### 5.2.4) Mounting Physical Dual-Boot NVMe Disks
+
 To access a physical Linux installation from a separate NVMe drive within WSL 2, we first identified the correct disk using partition GUIDs.
 Disk Analysis Output:
+
 ```text
 DiskNumber PartitionNumber DriveLetter         Size Type     GptType
 ---------- --------------- -----------         ---- ----     -------
@@ -356,6 +513,7 @@ DiskNumber PartitionNumber DriveLetter         Size Type     GptType
 
 Identification: Disk 1 was identified as the Linux disk because of the GptType `{0fc63daf-...} (Linux Filesystem Data)`. Disk 0 was identified as Windows due to the `{ebd0a0a2-...} GUID (Microsoft Basic Data)`.
 Mounting the Partition:
+
 ```powershell
 # Mount the Root partition from the second NVMe disk
 wsl --mount \\.\PHYSICALDRIVE1 --partition 4
@@ -368,7 +526,9 @@ wsl --unmount \\.\PHYSICALDRIVE1
 ```
 
 ### 5.2.5) Post-Migration Cleanup
+
 After verifying that the D: drive installation is running and the data is accessible, the temporary backup was removed:
+
 ```powershell
 Remove-Item -Path D:\WSL\backup -Recurse -Force
 ```
@@ -1280,3 +1440,4 @@ If you want, I can also generate a **1-page punch-list version** of this (same s
 [5]: [https://packages.debian.org/source/sid/lenovolegionlinux?utm_source=chatgpt.com](https://packages.debian.org/source/sid/lenovolegionlinux?utm_source=chatgpt.com) "Details of source package lenovolegionlinux in sid"
 [6]: [https://github.com/4JX/L5P-Keyboard-RGB?utm_source=chatgpt.com](https://github.com/4JX/L5P-Keyboard-RGB?utm_source=chatgpt.com) "4JX/L5P-Keyboard-RGB"
 [7]: [https://gitlab.com/Scias/plasmavantage?utm_source=chatgpt.com](https://gitlab.com/Scias/plasmavantage?utm_source=chatgpt.com) "PlasmaVantage - Scias"
+

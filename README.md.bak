@@ -1,9 +1,15 @@
 # legion-setup
 
-# Legion Pro 7i (Gen 10, 2025) Dual-Boot AI Workstation Playbook **Windows 11 Home + Ubuntu 24.04.x | Secure Boot ON | Dynamic Graphics | Clean storage | Battery/RAM optimized | RTX for AI** > Cut-paste-ready, end-to-end playbook.
+# Legion Pro 7i (Gen 10, 2025) Dual-Boot AI Workstation Playbook
+**Windows 11 Home + Ubuntu 24.04.x | Secure Boot ON | Dynamic Graphics | Clean storage | Battery/RAM optimized | RTX for AI**
+
+> Cut-paste-ready, end-to-end playbook.  
 > Includes: **Ventoy (Secure Boot)**, **Windows + WSL + Docker on D:**, **Linux /home dev universe**, **multi-Java + multi-Node + Miniconda**, **Android Studio**, **VS Code**, **Chrome profile/cache placement + iGPU targeting**, **shared NTFS data lake**, **root partition growth control**, **HWE kernel + GA fallback kernel + GRUB menu**, **snap removal (clean) + DEB restore**, and **Legion control stack (fans/power/keyboard)**.
+
 ---
+
 ## 0A) Repo automation scripts (setup-aryan) — staging + recovery (Windows/Linux kept separate)
+
 This repo now includes **OS-specific setup frameworks** you can stage onto the system so you can re-run fixes anytime (even after breakage).
 
 ### Repo layout (added)
@@ -27,60 +33,6 @@ This repo now includes **OS-specific setup frameworks** you can stage onto the s
 - Binaries/scripts: `C:\Tools\aryan-setup\`
 - Logs: `D:\aryan-setup\logs\`
 - State: `D:\aryan-setup\state\`
-
-> **Correction note (state-files standard, do not ignore):**
-> - Windows state directory is **`D:\aryan-setup\state-files\`** (real directory, no symlinks).
-> - Linux state directory remains **`/var/log/setup-aryan/state-files/`** (real directory, no symlinks).
-> - State management uses **no JSON** anywhere. Each action writes **`<action>.state`** (INI-style `key=value`, UTF-8).
-
-### Standardized automation contract (added)
-This repo’s `setup-aryan` actions must follow these invariants so you can safely re-run them during debugging and recovery:
-
-**1) Shell + PowerShell version consistency**
-- Linux: **bash** (POSIX-ish bash scripts)
-- Windows: **Windows PowerShell 5.1** (no PS7-only features required)
-
-**2) Logs**
-- Linux logs: `/var/log/setup-aryan/`
-- Windows logs: `D:\aryan-setup\logs\`
-- Log line format (exact): `<TZ dd-mm-yyyy HH:MM:ss> <Error|Warning|Info|Debug> <message>`
-
-**3) State-files (no JSON, no symlinks)**
-- Linux state dir: `/var/log/setup-aryan/state-files/` (real directory)
-- Windows state dir: `D:\aryan-setup\state-files\` (real directory)
-- Each action writes: `<action>.state` with the fields below (as `key=value`):
-  - `action`
-  - `status` (`success|failed|skipped`)
-  - `rc`
-  - `started_at` (ISO8601)
-  - `finished_at` (ISO8601)
-  - `user`
-  - `host`
-  - `log_path`
-  - `version`
-
-**4) Idempotency + force semantics**
-- Default: if `<action>.state` exists and `status=success`, the action should **skip** safely.
-- Force:
-  - Linux actions must support: `--force`
-  - Windows actions must support: `-Force`
-  - Force means: **re-run** the action even if it previously succeeded, and then overwrite/update the action’s `.state`.
-
-### Prerequisites (before staging or running any actions) (added)
-**Windows (PowerShell 5.1)**
-- Run in an **elevated** PowerShell (Administrator) when an action requires admin rights.
-- `git` installed (to clone/update repo).
-- Execution policy must allow running the staging script (staging command below uses `-ExecutionPolicy Bypass`).
-
-**Linux (Ubuntu 24.04.x)**
-- `bash`, `sudo`, `git` installed.
-- You should be able to run `sudo` and write to `/usr/local/` and `/var/log/`.
-
-### Repo TODOs to incorporate (tracked work) (added)
-- **TODO #1** Fix Python toolchain workflow (Linux + Windows, uv+conda, PATH/activation, VS Code reliability)
-- **TODO #2** Notebook hang / runaway VRAM investigation + validation
-- **TODO #3** Add TensorFlow flag separate from AI/ML + TF JIT/first-run optimization + validation
-- **TODO #4** Explain/validate Xorg showing in `nvidia-smi`, keep GUI iGPU-first (PRIME on-demand)
 
 ### Staging commands (added)
 **Linux (run from repo root):**
@@ -284,7 +236,7 @@ Create these folders:
 
 ### 5.1 Cap WSL2 RAM (stops “Windows uses 10GB+”)
 
-Create: `C:\Users\\.wslconfig`
+Create: `C:\Users\<you>\.wslconfig`
 
 ```ini
 [wsl2]
@@ -321,8 +273,7 @@ wsl --set-default Ubuntu
 Docker Desktop → Settings → Resources → Advanced
 
 * Disk image location: `D:\DockerDesktop\`
-
-Apply & restart.
+  Apply & restart.
 
 ---
 
@@ -457,7 +408,8 @@ Verify:
 uname -r
 ```
 
-**If you see `6.14.0-27-generic`: yes, that’s normal for the 24.04 HWE track in late 2025.** HWE is meant to move forward (6.11+, then newer) as hardware enablement evolves.
+**If you see `6.14.0-27-generic`: yes, that’s normal for the 24.04 HWE track in late 2025.**
+HWE is meant to move forward (6.11+, then newer) as hardware enablement evolves.
 
 ### 8.2 Keep a GA (older/stable) kernel installed as a fallback
 
@@ -505,8 +457,7 @@ Now you’ll see:
 
 ### 9.1 Why “open kernel modules” matter on modern NVIDIA
 
-NVIDIA explicitly documents “Open Kernel Modules” installation routes on Ubuntu (packaged installs), vs proprietary modules and vs manual `.run` installs.
-For an RTX 50-series laptop, prefer packaged installs + open module flavor when available.
+NVIDIA explicitly documents “Open Kernel Modules” installation routes on Ubuntu (packaged installs), vs proprietary modules and vs manual `.run` installs. For an RTX 50-series laptop, prefer packaged installs + open module flavor when available.
 ([NVIDIA Docs][3])
 
 ### 9.2 Clean slate (if you’ve been experimenting)
@@ -582,8 +533,10 @@ sudo snap remove --purge gnome-42-2204 || true
 sudo snap remove --purge gtk-common-themes || true
 sudo snap remove --purge bare || true
 sudo snap remove --purge core22 || true
+
 sudo apt purge -y snapd
 sudo apt autoremove --purge -y
+
 rm -rf ~/snap
 sudo rm -rf /snap /var/snap /var/lib/snapd /var/cache/snapd /usr/lib/snapd
 ```
@@ -716,7 +669,6 @@ Now you can launch Chrome from:
 ## 13) VS Code on Linux: keep it on /home + optional “portable-ish” placement
 
 By default, VS Code on Linux stores data under `/home` (good).
-
 If you want to keep everything under your own structure:
 
 ### Option A (recommended): normal install (already safe)
@@ -1056,6 +1008,7 @@ powerprofilesctl set power-saver
 ### 18.3 Wayland note (RAM + stability)
 
 Ubuntu GNOME uses Wayland by default on many setups; RAM savings are not huge, but Wayland can reduce some compositor weirdness on hybrid systems.
+
 Your real RAM win is still:
 
 * limiting background apps
@@ -1073,9 +1026,7 @@ Windows:
 Linux equivalents:
 
 * **LenovoLegionLinux (LLL)**: DKMS kernel module + daemon (`legiond`) + CLI/GUI tooling for Legion controls (fan/power features vary by model).
-  It’s packaged on some distros and commonly installed from source on Ubuntu.
-  ([Debian Packages][5])
-
+  It’s packaged on some distros and commonly installed from source on Ubuntu. ([Debian Packages][5])
 * **Keyboard RGB**: L5P-Keyboard-RGB supports many Legion generations on Linux/Windows (check your exact keyboard controller compatibility).
   ([GitHub][6])
 
@@ -1087,13 +1038,14 @@ Because packaging varies on Ubuntu, the most reliable approach is “follow the 
 sudo apt -y install dkms build-essential git
 mkdir -p ~/dev/tools
 cd ~/dev/tools
-git clone
-cd
+git clone <repo>
+cd <repo>
 # then follow repo: dkms install / make install / install.sh (repo-dependent)
 ```
 
 **Important DKMS rule with dual kernels**
 When you keep **GA + HWE** kernels installed, DKMS modules should build for both.
+
 If one kernel is missing headers, you fix it with:
 
 ```bash
@@ -1134,8 +1086,8 @@ Make Linux reproducible:
 Helpful exports:
 
 ```bash
-conda env export > ~/dev/repos//env.yml
-pip freeze > ~/dev/repos//requirements.txt
+conda env export > ~/dev/repos/<repo>/env.yml
+pip freeze > ~/dev/repos/<repo>/requirements.txt
 ```
 
 ---
@@ -1216,10 +1168,14 @@ pip freeze > ~/dev/repos//requirements.txt
 * HDMI is dGPU-wired → you can’t fully power off RTX while using HDMI, but you can keep GUI on iGPU and use RTX only for compute.
 
 If you want, I can also generate a **1-page punch-list version** of this (same steps, zero explanation, just “do this → do that” for setup day).
-[1]: [https://linuxiac.com/rescuezilla-2-6-released-with-secure-boot-fixes/?utm_source=chatgpt.com](https://linuxiac.com/rescuezilla-2-6-released-with-secure-boot-fixes/?utm_source=chatgpt.com) "Rescuezilla 2.6 Released with Secure Boot Fixes and ..."
-[2]: [https://ventoy.net/en/doc_secure.html?utm_source=chatgpt.com](https://ventoy.net/en/doc_secure.html?utm_source=chatgpt.com) "About Secure Boot in UEFI mode"
-[3]: [https://docs.nvidia.com/datacenter/tesla/driver-installation-guide/ubuntu.html?utm_source=chatgpt.com](https://docs.nvidia.com/datacenter/tesla/driver-installation-guide/ubuntu.html?utm_source=chatgpt.com) "Ubuntu — NVIDIA Driver Installation Guide"
-[4]: [https://documentation.ubuntu.com/security/security-features/platform-protections/secure-boot/?utm_source=chatgpt.com](https://documentation.ubuntu.com/security/security-features/platform-protections/secure-boot/?utm_source=chatgpt.com) "UEFI Secure Boot"
-[5]: [https://packages.debian.org/source/sid/lenovolegionlinux?utm_source=chatgpt.com](https://packages.debian.org/source/sid/lenovolegionlinux?utm_source=chatgpt.com) "Details of source package lenovolegionlinux in sid"
-[6]: [https://github.com/4JX/L5P-Keyboard-RGB?utm_source=chatgpt.com](https://github.com/4JX/L5P-Keyboard-RGB?utm_source=chatgpt.com) "4JX/L5P-Keyboard-RGB"
-[7]: [https://gitlab.com/Scias/plasmavantage?utm_source=chatgpt.com](https://gitlab.com/Scias/plasmavantage?utm_source=chatgpt.com) "PlasmaVantage - Scias"
+
+[1]: https://linuxiac.com/rescuezilla-2-6-released-with-secure-boot-fixes/?utm_source=chatgpt.com "Rescuezilla 2.6 Released with Secure Boot Fixes and ..."
+[2]: https://ventoy.net/en/doc_secure.html?utm_source=chatgpt.com "About Secure Boot in UEFI mode"
+[3]: https://docs.nvidia.com/datacenter/tesla/driver-installation-guide/ubuntu.html?utm_source=chatgpt.com "Ubuntu — NVIDIA Driver Installation Guide"
+[4]: https://documentation.ubuntu.com/security/security-features/platform-protections/secure-boot/?utm_source=chatgpt.com "UEFI Secure Boot"
+[5]: https://packages.debian.org/source/sid/lenovolegionlinux?utm_source=chatgpt.com "Details of source package lenovolegionlinux in sid"
+[6]: https://github.com/4JX/L5P-Keyboard-RGB?utm_source=chatgpt.com "4JX/L5P-Keyboard-RGB"
+[7]: https://gitlab.com/Scias/plasmavantage?utm_source=chatgpt.com "PlasmaVantage - Scias"
+
+
+---

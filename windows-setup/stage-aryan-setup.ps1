@@ -46,7 +46,7 @@ powershell -ExecutionPolicy Bypass -File .\windows-setup\stage-aryan-setup.ps1 -
 powershell -ExecutionPolicy Bypass -File .\windows-setup\stage-aryan-setup.ps1 -NoPathUpdate
 #>
 
-[CmdletBinding(PositionalBinding=$false)]
+[CmdletBinding()]
 param(
   [Parameter(Mandatory=$false)]
   [switch]$Force,
@@ -64,32 +64,27 @@ param(
   [switch]$NoPathUpdate,
 
   [Parameter(Mandatory=$false)]
-  [switch]$Help,
-
-  [Parameter(ValueFromRemainingArguments=$true)]
-  [string[]]$ExtraArgs
+  [switch]$Help
 )
 
 Set-StrictMode -Version 2
 $ErrorActionPreference = "Stop"
 
-# Accept common GNU-style flags without breaking TargetRoot via positional binding
-if ($ExtraArgs) {
-  foreach ($a in $ExtraArgs) {
-    switch -Regex ($a) {
-      '^--force$'        { $Force = $true; continue }
-      '^--Force$'        { $Force = $true; continue }
-      '^--nopathupdate$' { $NoPathUpdate = $true; continue }
-      '^--NoPathUpdate$' { $NoPathUpdate = $true; continue }
-      '^--help$'         { $Help = $true; continue }
-      '^--Help$'         { $Help = $true; continue }
-      default            { throw "Unknown argument: $a. Use -Help." }
-    }
+function Show-Help { Get-Help -Detailed $MyInvocation.MyCommand.Path }
+if ($Help) { Show-Help; exit 0 }
+
+# Defensive: if user typed `--Force` (not a PS switch), it binds into TargetRoot as a string.
+if ($TargetRoot -like "-*") {
+  if ($TargetRoot -ieq "--Force" -or $TargetRoot -ieq "-Force") {
+    $Force = $true
+    $TargetRoot = "C:\Tools\aryan-setup"
+  } else {
+    throw "Invalid TargetRoot value: $TargetRoot"
   }
 }
 
-function Show-Help { Get-Help -Detailed $MyInvocation.MyCommand.Path }
-if ($Help) { Show-Help; exit 0 }
+if ($LogsRoot -like "-*") { throw "Invalid LogsRoot value: $LogsRoot" }
+if ($StateRoot -like "-*") { throw "Invalid StateRoot value: $StateRoot" }
 
 # ---------------------------
 # Action identity + paths
@@ -120,7 +115,7 @@ function Write-Log {
   $line = "{0} {1} {2}" -f (Get-ISTStamp), $Level, $Message
   Add-Content -LiteralPath $LogPath -Value $line -Encoding UTF8
   switch ($Level) {
-    "Error"   { Write-Error   -Message $Message -ErrorAction Continue }
+    "Error"   { Write-Error   $Message -ErrorAction Continue }
     "Warning" { Write-Warning $Message }
     "Info"    { Write-Host    $Message }
     "Debug"   { Write-Host    $Message }

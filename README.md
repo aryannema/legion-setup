@@ -86,7 +86,7 @@ This repo’s `setup-aryan` actions must follow these invariants so you can safe
 **Linux (run from repo root):**
 ```bash
 sudo bash ./linux-setup/stage-aryan-setup.sh
-```
+````
 
 **Windows (run from repo root in an elevated PowerShell):**
 
@@ -1432,12 +1432,12 @@ pip freeze > ~/dev/repos//requirements.txt
 * After kernel upgrades you don’t “reinstall build-essential”; you just ensure **headers exist** for DKMS modules.
 * HDMI is dGPU-wired → you can’t fully power off RTX while using HDMI, but you can keep GUI on iGPU and use RTX only for compute.
 
-If you want, I can also generate a **1-page punch-list version** of this (same steps, zero explanation, just “do this → do that” for setup day).
-[1]: [https://linuxiac.com/rescuezilla-2-6-released-with-secure-boot-fixes/?utm_source=chatgpt.com](https://linuxiac.com/rescuezilla-2-6-released-with-secure-boot-fixes/?utm_source=chatgpt.com) "Rescuezilla 2.6 Released with Secure Boot Fixes and ..."
-[2]: [https://ventoy.net/en/doc_secure.html?utm_source=chatgpt.com](https://ventoy.net/en/doc_secure.html?utm_source=chatgpt.com) "About Secure Boot in UEFI mode"
-[3]: [https://docs.nvidia.com/datacenter/tesla/driver-installation-guide/ubuntu.html?utm_source=chatgpt.com](https://docs.nvidia.com/datacenter/tesla/driver-installation-guide/ubuntu.html?utm_source=chatgpt.com) "Ubuntu — NVIDIA Driver Installation Guide"
-[4]: [https://documentation.ubuntu.com/security/security-features/platform-protections/secure-boot/?utm_source=chatgpt.com](https://documentation.ubuntu.com/security/security-features/platform-protections/secure-boot/?utm_source=chatgpt.com) "UEFI Secure Boot"
-[5]: [https://packages.debian.org/source/sid/lenovolegionlinux?utm_source=chatgpt.com](https://packages.debian.org/source/sid/lenovolegionlinux?utm_source=chatgpt.com) "Details of source package lenovolegionlinux in sid"
-[6]: [https://github.com/4JX/L5P-Keyboard-RGB?utm_source=chatgpt.com](https://github.com/4JX/L5P-Keyboard-RGB?utm_source=chatgpt.com) "4JX/L5P-Keyboard-RGB"
-[7]: [https://gitlab.com/Scias/plasmavantage?utm_source=chatgpt.com](https://gitlab.com/Scias/plasmavantage?utm_source=chatgpt.com) "PlasmaVantage - Scias"
 
+
+[1]: https://linuxiac.com/rescuezilla-2-6-released-with-secure-boot-fixes/ "Rescuezilla 2.6 Released with Secure Boot Fixes and ..."
+[2]: https://ventoy.net/en/doc_secure.html "About Secure Boot in UEFI mode"
+[3]: https://docs.nvidia.com/datacenter/tesla/driver-installation-guide/ubuntu.html "Ubuntu — NVIDIA Driver Installation Guide"
+[4]: https://documentation.ubuntu.com/security/security-features/platform-protections/secure-boot/ "UEFI Secure Boot"
+[5]: https://packages.debian.org/source/sid/lenovolegionlinux "Details of source package lenovolegionlinux in sid"
+[6]: https://github.com/4JX/L5P-Keyboard-RGB "4JX/L5P-Keyboard-RGB"
+[7]: https://gitlab.com/Scias/plasmavantage "PlasmaVantage - Scias"

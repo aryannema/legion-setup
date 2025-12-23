@@ -46,7 +46,7 @@ powershell -ExecutionPolicy Bypass -File .\windows-setup\stage-aryan-setup.ps1 -
 powershell -ExecutionPolicy Bypass -File .\windows-setup\stage-aryan-setup.ps1 -NoPathUpdate
 #>
 
-[CmdletBinding()]
+[CmdletBinding(PositionalBinding=$false)]
 param(
   [Parameter(Mandatory=$false)]
   [switch]$Force,
@@ -64,11 +64,29 @@ param(
   [switch]$NoPathUpdate,
 
   [Parameter(Mandatory=$false)]
-  [switch]$Help
+  [switch]$Help,
+
+  [Parameter(ValueFromRemainingArguments=$true)]
+  [string[]]$ExtraArgs
 )
 
 Set-StrictMode -Version 2
 $ErrorActionPreference = "Stop"
+
+# Accept common GNU-style flags without breaking TargetRoot via positional binding
+if ($ExtraArgs) {
+  foreach ($a in $ExtraArgs) {
+    switch -Regex ($a) {
+      '^--force$'        { $Force = $true; continue }
+      '^--Force$'        { $Force = $true; continue }
+      '^--nopathupdate$' { $NoPathUpdate = $true; continue }
+      '^--NoPathUpdate$' { $NoPathUpdate = $true; continue }
+      '^--help$'         { $Help = $true; continue }
+      '^--Help$'         { $Help = $true; continue }
+      default            { throw "Unknown argument: $a. Use -Help." }
+    }
+  }
+}
 
 function Show-Help { Get-Help -Detailed $MyInvocation.MyCommand.Path }
 if ($Help) { Show-Help; exit 0 }
@@ -102,7 +120,7 @@ function Write-Log {
   $line = "{0} {1} {2}" -f (Get-ISTStamp), $Level, $Message
   Add-Content -LiteralPath $LogPath -Value $line -Encoding UTF8
   switch ($Level) {
-    "Error"   { Write-Error   $Message }
+    "Error"   { Write-Error   -Message $Message -ErrorAction Continue }
     "Warning" { Write-Warning $Message }
     "Info"    { Write-Host    $Message }
     "Debug"   { Write-Host    $Message }

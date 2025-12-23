@@ -1,8 +1,3 @@
-
----
-
-## 2) `new-java-project-windows.ps1`
-```powershell
 #requires -Version 5.1
 <#
 Creates a new Java project scaffold aligned with the Aryan workstation toolchain.

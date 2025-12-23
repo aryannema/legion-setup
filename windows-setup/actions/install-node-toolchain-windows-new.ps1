@@ -14,31 +14,25 @@ Logging + state (repo standard):
 - Logs:  D:\aryan-setup\logs\install-node-toolchain-windows.log
 - State: D:\aryan-setup\state-files\install-node-toolchain-windows.state   (INI-style key=value, UTF-8; NO JSON)
 
+Windows parity notes:
+- nvm-windows installed and available as `nvm` (one-time manual install; this repo avoids winget)
+- Open a NEW terminal after initial nvm install so PATH/env vars propagate.
+
 Force semantics:
 - Default: if prior state is success, skip safely
-- -Force: re-run and refresh configuration
+- -Force: re-run and refresh the installation + state
 
 .PREREQUISITES
 - Windows 11
 - Windows PowerShell 5.1
+- Internet access (to download Temurin JDK)
 - D:\ drive present (repo layout)
-- Internet access (only if Node LTS must be installed)
-- nvm-windows installed and available as `nvm` (one-time manual install; this repo avoids winget)
 
 .PARAMETER Force
 Re-run even if state indicates previous success.
 
 .PARAMETER DevRoot
 Root of the dev volume (default: D:\dev)
-
-.PARAMETER Help
-Show detailed help.
-
-.EXAMPLE
-setup-aryan install-node-toolchain-windows
-
-.EXAMPLE
-setup-aryan install-node-toolchain-windows -Force
 #>
 
 [CmdletBinding()]
@@ -47,13 +41,10 @@ param(
   [switch]$Force,
 
   [Parameter(Mandatory=$false)]
-  [string]$DevRoot = "D:\dev",
-
-  [Parameter(Mandatory=$false)]
-  [switch]$Help
+  [string]$DevRoot = "D:\dev"
 )
 
-Set-StrictMode -Version 2
+Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $ActionName = "install-node-toolchain-windows"
@@ -61,11 +52,8 @@ $Version    = "1.1.1"
 
 $LogsRoot   = "D:\aryan-setup\logs"
 $StateRoot  = "D:\aryan-setup\state-files"
-$LogFile    = Join-Path $LogsRoot  "$ActionName.log"
-$StateFile  = Join-Path $StateRoot "$ActionName.state"
-
-function Show-Help { Get-Help -Detailed $MyInvocation.MyCommand.Path }
-if ($Help) { Show-Help; exit 0 }
+$LogFile    = Join-Path $LogsRoot  "install-node-toolchain-windows.log"
+$StateFile  = Join-Path $StateRoot "install-node-toolchain-windows.state"
 
 function Ensure-Dir {
   param([Parameter(Mandatory=$true)][string]$Path)
@@ -73,13 +61,10 @@ function Ensure-Dir {
 }
 
 function Get-ISTStamp {
-  try {
-    $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById("India Standard Time")
-    $dt = [System.TimeZoneInfo]::ConvertTime((Get-Date), $tz)
-    return ("IST {0}" -f $dt.ToString("dd-MM-yyyy HH:mm:ss"))
-  } catch {
-    return ("IST {0}" -f (Get-Date).ToString("dd-MM-yyyy HH:mm:ss"))
-  }
+  $tz = [TimeZoneInfo]::FindSystemTimeZoneById("India Standard Time")
+  $nowIst = [TimeZoneInfo]::ConvertTime([DateTime]::Now, $tz)
+  return ("IST {0}" -f $nowIst.ToString("dd-MM-yyyy HH:mm:ss"))
+  return ("IST {0}" -f (Get-Date).ToString("dd-MM-yyyy HH:mm:ss"))
 }
 
 function Write-Log {
@@ -91,7 +76,7 @@ function Write-Log {
   Ensure-Dir -Path $StateRoot
   Add-Content -LiteralPath $LogFile -Value "$(Get-ISTStamp) $Level $Message" -Encoding UTF8
   switch ($Level) {
-    "Error"   { Write-Error   $Message }
+    "Error"   { Write-Error   $Message -ErrorAction Continue }
     "Warning" { Write-Warning $Message }
     "Info"    { Write-Host    $Message }
     "Debug"   { Write-Host    $Message }
@@ -111,7 +96,7 @@ function Read-State {
     if ($idx -lt 1) { continue }
     $k = $ln.Substring(0, $idx).Trim()
     $v = $ln.Substring($idx + 1).Trim()
-    if ($k.Length -gt 0) { $map[$k] = $v }
+    if ($k) { $map[$k] = $v }
   }
   return $map
 }
@@ -123,21 +108,18 @@ function Write-State {
     [Parameter(Mandatory=$true)][string]$StartedAt,
     [Parameter(Mandatory=$true)][string]$FinishedAt
   )
-
-  $fields = @()
-  $fields += "action=$ActionName"
-  $fields += "status=$Status"
-  $fields += "rc=$Rc"
-  $fields += "started_at=$StartedAt"
-  $fields += "finished_at=$FinishedAt"
-  $fields += "user=$([Environment]::UserName)"
-  $fields += "host=$($env:COMPUTERNAME)"
-  $fields += "log_path=$LogFile"
-  $fields += "version=$Version"
-
-  $tmp = "$StateFile.tmp"
-  Set-Content -LiteralPath $tmp -Value $fields -Encoding UTF8
-  Move-Item -LiteralPath $tmp -Destination $StateFile -Force
+  Ensure-Dir -Path $StateRoot
+  $content = @(
+    "status=$Status",
+    "rc=$Rc",
+    "action=$ActionName",
+    "version=$Version",
+    "started_at=$StartedAt",
+    "finished_at=$FinishedAt",
+    "force=$Force",
+    "dev_root=$DevRoot"
+  )
+  Set-Content -LiteralPath $StateFile -Value $content -Encoding UTF8
 }
 
 function Ensure-UserEnvVar {
@@ -174,6 +156,111 @@ function Add-ToUserPath {
   Write-Log Info "Open a new terminal for PATH changes to take effect."
 }
 
+function Set-Tls12 {
+  # PS 5.1 needs TLS 1.2 for many modern HTTPS endpoints
+  try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
+}
+
+function Download-File {
+  param(
+    [Parameter(Mandatory=$true)][string]$Url,
+    [Parameter(Mandatory=$true)][string]$OutFile
+  )
+
+  Set-Tls12
+  try {
+    Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
+    return
+  } catch {
+    Write-Log Warning "Invoke-WebRequest failed: $($_.Exception.Message)"
+  }
+
+  $curl = Join-Path $env:SystemRoot "System32\curl.exe"
+  if (Test-Path -LiteralPath $curl) {
+    $p = Start-Process -FilePath $curl -ArgumentList @("-L", $Url, "-o", $OutFile) -NoNewWindow -Wait -PassThru
+    if ($p.ExitCode -ne 0) { throw "curl.exe failed with exit code: $($p.ExitCode)" }
+    return
+  }
+
+  throw "Download failed and curl.exe not available."
+}
+
+function Ensure-NvmWindows {
+  $nvmRoot = Join-Path $DevRoot "tools\nvm-windows"
+  $nvmHome = Join-Path $nvmRoot "current"
+  $nodeLink = Join-Path $DevRoot "tools\nodejs"
+  $nvmExe = Join-Path $nvmHome "nvm.exe"
+
+  Ensure-Dir -Path $nvmRoot
+  Ensure-Dir -Path $nodeLink
+
+  # Always ensure env vars + PATH entries (idempotent)
+  Ensure-UserEnvVar -Name "NVM_HOME" -Value $nvmHome
+  Ensure-UserEnvVar -Name "NVM_SYMLINK" -Value $nodeLink
+  Add-ToUserPath -DirToAdd $nvmHome
+  Add-ToUserPath -DirToAdd $nodeLink
+
+  # Make available in this session too (no restart requirement for the action itself)
+  if (-not ($env:Path -split ';' | Where-Object { $_ -ieq $nvmHome })) { $env:Path = "$nvmHome;$env:Path" }
+  if (-not ($env:Path -split ';' | Where-Object { $_ -ieq $nodeLink })) { $env:Path = "$nodeLink;$env:Path" }
+  $env:NVM_HOME = $nvmHome
+  $env:NVM_SYMLINK = $nodeLink
+
+  if (Get-Command nvm -ErrorAction SilentlyContinue) {
+    return
+  }
+
+  if (Test-Path -LiteralPath $nvmExe) {
+    return
+  }
+
+  Write-Log Info "Installing nvm-windows (no-install) into: $nvmHome"
+
+  $tmp = Join-Path $env:TEMP "setup-aryan-nvm"
+  Ensure-Dir -Path $tmp
+  $zip = Join-Path $tmp "nvm-noinstall.zip"
+
+  if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue }
+
+  # Official release asset (no-install; avoids UAC prompts)
+  Download-File -Url "https://github.com/coreybutler/nvm-windows/releases/latest/download/nvm-noinstall.zip" -OutFile $zip
+
+  try { Unblock-File -LiteralPath $zip -ErrorAction SilentlyContinue } catch { }
+
+  # Recreate install dir
+  if (Test-Path -LiteralPath $nvmHome) {
+    if ($Force) {
+      Remove-Item -LiteralPath $nvmHome -Recurse -Force -ErrorAction Stop
+    }
+  }
+  Ensure-Dir -Path $nvmHome
+
+  Expand-Archive -LiteralPath $zip -DestinationPath $nvmHome -Force
+
+  if (-not (Test-Path -LiteralPath $nvmExe)) {
+    throw "nvm.exe not found after extract at: $nvmExe"
+  }
+
+  # Manual install requires settings.txt
+  $settings = Join-Path $nvmHome "settings.txt"
+  $arch = "64"
+  $content = @(
+    "root: $nvmHome",
+    "path: $nodeLink",
+    "arch: $arch",
+    "proxy: none"
+  )
+  Set-Content -LiteralPath $settings -Value $content -Encoding ASCII
+
+  # Validate
+  $ver = (& $nvmExe version) 2>$null
+  if (-not $ver) {
+    Write-Log Warning "nvm installed but version command did not return output in this session."
+  } else {
+    Write-Log Info "nvm ready: $ver"
+  }
+}
+
 function Ensure-Node {
   if (Get-Command node -ErrorAction SilentlyContinue) {
     $ver = (& node -v) 2>$null
@@ -183,14 +270,14 @@ function Ensure-Node {
     }
   }
 
-  $nvm = Get-Command nvm -ErrorAction SilentlyContinue
-  if (-not $nvm) {
-    throw "Node not found and nvm-windows is not installed. Install nvm-windows (one-time), open a NEW terminal, then re-run this action."
-  }
+  Ensure-NvmWindows
 
   Write-Log Info "Installing Node.js LTS via nvm-windows..."
-  & nvm install lts | Out-Null
-  & nvm use lts | Out-Null
+  try { & nvm install lts | Out-Null } catch { throw "nvm install lts failed: $($_.Exception.Message)" }
+
+  try { & nvm use lts | Out-Null } catch {
+    throw "nvm use lts failed (this often needs symlink permissions). Try running an elevated terminal or enable Windows Developer Mode for non-admin symlinks. Details: $($_.Exception.Message)"
+  }
 
   if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
     throw "nvm reported success but 'node' is still not on PATH in this session. Open a new terminal and re-run."
@@ -230,20 +317,21 @@ function Pin-Caches {
   Ensure-UserEnvVar -Name "PNPM_HOME" -Value $pnpmHome
   Add-ToUserPath -DirToAdd $pnpmHome
 
-  Write-Log Info "Pinning pnpm store dir -> $pnpmStore"
-  & pnpm config set store-dir $pnpmStore --global | Out-Null
+  Ensure-UserEnvVar -Name "NPM_CONFIG_CACHE" -Value $npmCache
+  Ensure-UserEnvVar -Name "PNPM_STORE_PATH" -Value $pnpmStore
 
-  Write-Log Info "Pinning npm cache -> $npmCache"
-  & npm config set cache $npmCache --global | Out-Null
+  # Make these effective in current session too
+  $env:PNPM_HOME = $pnpmHome
+  $env:NPM_CONFIG_CACHE = $npmCache
+  $env:PNPM_STORE_PATH = $pnpmStore
 }
 
 # ---------------------------
 # Main
 # ---------------------------
 $startedAt = Get-ISO8601
-
-Ensure-Dir -Path $LogsRoot
-Ensure-Dir -Path $StateRoot
+$rc = 0
+$status = "success"
 
 Write-Log Info "Starting: $ActionName (version=$Version, Force=$Force, DevRoot=$DevRoot)"
 
@@ -260,17 +348,13 @@ try {
   Write-Log Warning "Could not read prior state (continuing): $($_.Exception.Message)"
 }
 
-$rc = 0
-$status = "success"
-
 try {
-  if (-not (Test-Path -LiteralPath "D:\")) { throw "D:\ drive not found. Repo policy expects logs/state on D:\." }
+  if (-not (Test-Path -LiteralPath "D:\")) { throw "D:\ drive not found. Repo policy expects tools on D:\." }
 
+  Pin-Caches
   Ensure-Node
   Ensure-CorepackPnpm
-  Pin-Caches
 
-  Write-Log Info "Done. Open a new terminal if PATH changes were applied."
 } catch {
   $rc = 1
   $status = "failed"

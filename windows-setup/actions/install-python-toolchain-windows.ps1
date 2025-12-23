@@ -199,16 +199,15 @@ function Download-File {
   throw "Download failed and curl.exe not available."
 }
 
-function Upsert-ProfileBlock {
+function Upsert-ProfileLoaderBlock {
   param(
     [Parameter(Mandatory=$true)][string]$ProfilePath,
     [Parameter(Mandatory=$true)][string]$Begin,
     [Parameter(Mandatory=$true)][string]$End,
-    [Parameter(Mandatory=$true)][string]$Block
+    [Parameter(Mandatory=$true)][string]$LoaderBlock
   )
 
   Ensure-Dir -Path (Split-Path -Parent $ProfilePath)
-
   if (-not (Test-Path -LiteralPath $ProfilePath)) {
     New-Item -ItemType File -Path $ProfilePath -Force | Out-Null
   }
@@ -220,30 +219,26 @@ function Upsert-ProfileBlock {
   $pattern = [regex]::Escape($Begin) + "(.|\r|\n)*?" + [regex]::Escape($End)
   $clean = [regex]::Replace($text, $pattern, "", [System.Text.RegularExpressions.RegexOptions]::Singleline)
 
-  if (-not [string]::IsNullOrWhiteSpace($clean) -and -not $clean.EndsWith("`r`n")) {
-    $clean += "`r`n"
-  }
-
-  Set-Content -LiteralPath $ProfilePath -Value ($clean + $Block + "`r`n") -Encoding UTF8
+  if (-not [string]::IsNullOrWhiteSpace($clean) -and -not $clean.EndsWith("`r`n")) { $clean += "`r`n" }
+  Set-Content -LiteralPath $ProfilePath -Value ($clean + $LoaderBlock + "`r`n") -Encoding UTF8
 }
 
 
 
-function Ensure-CondaHookInProfile {
+
+function Ensure-SetupAryanProfileHook {
   $profilePath = $PROFILE.CurrentUserAllHosts
 
   $begin = "# >>> setup-aryan BEGIN >>>"
   $end   = "# <<< setup-aryan END <<<"
 
-  # Managed file lives in staged bin (stable). Profile becomes a simple loader only.
   $managed = "C:\Tools\aryan-setup\bin\setup-aryan-profile.ps1"
-
-  # Write/overwrite managed hook file (safe, deterministic, no fancy one-liners)
   Ensure-Dir -Path (Split-Path -Parent $managed)
 
   $condaExe = (Join-Path $CondaPrefix "Scripts\conda.exe")
-  $uvPath   = $UvDir
+  $uvDir    = $UvDir
 
+  # Managed hook content: overwrite each run (deterministic)
   $managedContent = @"
 # setup-aryan managed profile hook (generated). Safe to overwrite.
 
@@ -254,30 +249,31 @@ if (Test-Path -LiteralPath `$__condaExe) {
 }
 
 # Ensure uv is on PATH for this session.
-`$__uvDir = "$uvPath"
+`$__uvDir = "$uvDir"
 if (Test-Path -LiteralPath `$__uvDir) {
-  `$pathParts = `$env:Path -split ';'
-  `$alreadyPresent = `$false
-  foreach (`$p in `$pathParts) {
-    if (`$p.TrimEnd('\') -ieq `$__uvDir.TrimEnd('\')) { `$alreadyPresent = `$true; break }
+  `$parts = `$env:Path -split ';'
+  `$found = `$false
+  foreach (`$p in `$parts) {
+    if (`$p.TrimEnd('\') -ieq `$__uvDir.TrimEnd('\')) { `$found = `$true; break }
   }
-  if (-not `$alreadyPresent) { `$env:Path = "`$__uvDir;`$env:Path" }
+  if (-not `$found) { `$env:Path = "`$__uvDir;`$env:Path" }
 }
 "@
 
   Set-Content -LiteralPath $managed -Value $managedContent -Encoding UTF8
   Write-Log Info "Wrote managed profile hook: $managed"
 
-  # Profile block is only a loader (boring = robust)
-  $block = @"
+  # Profile loader block only (boring = robust)
+  $loader = @"
 $begin
-# Loader only (keep profile boring + safe)
-if (Test-Path -LiteralPath "$managed") { . "$managed" }
+# Loader only. Keep the profile boring and stable.
+`$__setupAryanManaged = "$managed"
+if (Test-Path -LiteralPath `$__setupAryanManaged) { . `$__setupAryanManaged }
 $end
 "@
 
-  Upsert-ProfileBlock -ProfilePath $profilePath -Begin $begin -End $end -Block $block
-  Write-Log Info "Updated PowerShell profile hook: $profilePath"
+  Upsert-ProfileLoaderBlock -ProfilePath $profilePath -Begin $begin -End $end -LoaderBlock $loader
+  Write-Log Info "Updated PowerShell profile loader: $profilePath"
 }
 
 function Ensure-BaseDirs {
@@ -417,7 +413,8 @@ try {
   Ensure-Uv | Out-Null
   Pin-UvCache
   Pin-Paths
-  Ensure-CondaHookInProfile
+  #Ensure-CondaHookInProfile
+  Ensure-SetupAryanProfileHook
 
   Write-Log Info "Done. Open a NEW terminal and run: conda --version ; uv --version"
 } catch {

@@ -209,27 +209,24 @@ function Upsert-ProfileBlock {
 
   Ensure-Dir -Path (Split-Path -Parent $ProfilePath)
 
- if (-not (Test-Path -LiteralPath $ProfilePath)) {
+  if (-not (Test-Path -LiteralPath $ProfilePath)) {
     New-Item -ItemType File -Path $ProfilePath -Force | Out-Null
   }
 
   $text = ""
   try { $text = Get-Content -LiteralPath $ProfilePath -Raw -ErrorAction Stop } catch { $text = "" }
 
-  $beginEsc = [regex]::Escape($Begin)
-  $endEsc   = [regex]::Escape($End)
-  $pattern  = $beginEsc + "(.|\r|\n)*?" + $endEsc
+  # Purge ALL occurrences (handles duplicates + nested blocks safely)
+  $pattern = [regex]::Escape($Begin) + "(.|\r|\n)*?" + [regex]::Escape($End)
+  $clean = [regex]::Replace($text, $pattern, "", [System.Text.RegularExpressions.RegexOptions]::Singleline)
 
-  if ([regex]::IsMatch($text, $pattern)) {
-    $updated = [regex]::Replace($text, $pattern, $Block)
-    Set-Content -LiteralPath $ProfilePath -Value $updated -Encoding UTF8
-  } else {
-    if (-not [string]::IsNullOrWhiteSpace($text) -and -not $text.EndsWith("`r`n")) {
-      $text = $text + "`r`n"
-    }
-    Set-Content -LiteralPath $ProfilePath -Value ($text + $Block + "`r`n") -Encoding UTF8
+  if (-not [string]::IsNullOrWhiteSpace($clean) -and -not $clean.EndsWith("`r`n")) {
+    $clean += "`r`n"
   }
+
+  Set-Content -LiteralPath $ProfilePath -Value ($clean + $Block + "`r`n") -Encoding UTF8
 }
+
 
 
 function Ensure-CondaHookInProfile {
@@ -238,21 +235,25 @@ function Ensure-CondaHookInProfile {
   $begin = "# >>> setup-aryan BEGIN >>>"
   $end   = "# <<< setup-aryan END <<<"
 
+  # Managed file lives in staged bin (stable). Profile becomes a simple loader only.
+  $managed = "C:\Tools\aryan-setup\bin\setup-aryan-profile.ps1"
+
+  # Write/overwrite managed hook file (safe, deterministic, no fancy one-liners)
+  Ensure-Dir -Path (Split-Path -Parent $managed)
+
   $condaExe = (Join-Path $CondaPrefix "Scripts\conda.exe")
   $uvPath   = $UvDir
 
-  # Keep the profile block intentionally BORING and line-break safe.
-  # No pipelines with scriptblocks that might get wrapped/broken.
-  $block = @"
-$begin
+  $managedContent = @"
+# setup-aryan managed profile hook (generated). Safe to overwrite.
 
-# Conda PowerShell hook (idempotent). Required for reliable conda activate in PS 5.1.
+# Conda PowerShell hook (idempotent).
 `$__condaExe = "$condaExe"
 if (Test-Path -LiteralPath `$__condaExe) {
   (& `$__condaExe "shell.powershell" "hook") | Out-String | Invoke-Expression
 }
 
-# Ensure uv is on PATH for this session
+# Ensure uv is on PATH for this session.
 `$__uvDir = "$uvPath"
 if (Test-Path -LiteralPath `$__uvDir) {
   `$pathParts = `$env:Path -split ';'
@@ -262,7 +263,16 @@ if (Test-Path -LiteralPath `$__uvDir) {
   }
   if (-not `$alreadyPresent) { `$env:Path = "`$__uvDir;`$env:Path" }
 }
+"@
 
+  Set-Content -LiteralPath $managed -Value $managedContent -Encoding UTF8
+  Write-Log Info "Wrote managed profile hook: $managed"
+
+  # Profile block is only a loader (boring = robust)
+  $block = @"
+$begin
+# Loader only (keep profile boring + safe)
+if (Test-Path -LiteralPath "$managed") { . "$managed" }
 $end
 "@
 

@@ -207,46 +207,62 @@ function Upsert-ProfileBlock {
     [Parameter(Mandatory=$true)][string]$Block
   )
 
-  if (-not (Test-Path -LiteralPath $ProfilePath)) {
-    Ensure-Dir -Path (Split-Path -Parent $ProfilePath)
+  Ensure-Dir -Path (Split-Path -Parent $ProfilePath)
+
+ if (-not (Test-Path -LiteralPath $ProfilePath)) {
     New-Item -ItemType File -Path $ProfilePath -Force | Out-Null
   }
 
-  $text = Get-Content -LiteralPath $ProfilePath -Raw -ErrorAction Stop
+  $text = ""
+  try { $text = Get-Content -LiteralPath $ProfilePath -Raw -ErrorAction Stop } catch { $text = "" }
 
-  if ($text -match [regex]::Escape($Begin)) {
-    $pattern = [regex]::Escape($Begin) + "(.|\r|\n)*?" + [regex]::Escape($End)
+  $beginEsc = [regex]::Escape($Begin)
+  $endEsc   = [regex]::Escape($End)
+  $pattern  = $beginEsc + "(.|\r|\n)*?" + $endEsc
+
+  if ([regex]::IsMatch($text, $pattern)) {
     $updated = [regex]::Replace($text, $pattern, $Block)
     Set-Content -LiteralPath $ProfilePath -Value $updated -Encoding UTF8
   } else {
-    Add-Content -LiteralPath $ProfilePath -Value "`r`n$Block`r`n" -Encoding UTF8
+    if (-not [string]::IsNullOrWhiteSpace($text) -and -not $text.EndsWith("`r`n")) {
+      $text = $text + "`r`n"
+    }
+    Set-Content -LiteralPath $ProfilePath -Value ($text + $Block + "`r`n") -Encoding UTF8
   }
 }
+
 
 function Ensure-CondaHookInProfile {
   $profilePath = $PROFILE.CurrentUserAllHosts
 
-  $begin = "# >>> setup-aryan conda BEGIN >>>"
-  $end   = "# <<< setup-aryan conda END <<<"
+  $begin = "# >>> setup-aryan BEGIN >>>"
+  $end   = "# <<< setup-aryan END <<<"
 
-  $condaExe = Join-Path $CondaPrefix "Scripts\conda.exe"
+  $condaExe = (Join-Path $CondaPrefix "Scripts\conda.exe")
   $uvPath   = $UvDir
 
-  # IMPORTANT: This here-string is written into the user's PowerShell profile.
-  # We must escape `$` so it remains `$env:Path` at *profile runtime* (not at install time).
+  # Keep the profile block intentionally BORING and line-break safe.
+  # No pipelines with scriptblocks that might get wrapped/broken.
   $block = @"
 $begin
-# Conda PowerShell hook (idempotent). Required for reliable `conda activate` in PS 5.1.
-if (Test-Path -LiteralPath "$condaExe") {
-  (& "$condaExe" "shell.powershell" "hook") | Out-String | Invoke-Expression
+
+# Conda PowerShell hook (idempotent). Required for reliable conda activate in PS 5.1.
+`$__condaExe = "$condaExe"
+if (Test-Path -LiteralPath `$__condaExe) {
+  (& `$__condaExe "shell.powershell" "hook") | Out-String | Invoke-Expression
 }
 
-# Ensure uv is reachable (installed by setup-aryan)
-if (Test-Path -LiteralPath "$uvPath") {
-  if (-not (`$env:Path -split ';' | Where-Object { `$_.TrimEnd('\') -ieq "$uvPath" })) {
-    `$env:Path = "$uvPath;`$env:Path"
+# Ensure uv is on PATH for this session
+`$__uvDir = "$uvPath"
+if (Test-Path -LiteralPath `$__uvDir) {
+  `$pathParts = `$env:Path -split ';'
+  `$alreadyPresent = `$false
+  foreach (`$p in `$pathParts) {
+    if (`$p.TrimEnd('\') -ieq `$__uvDir.TrimEnd('\')) { `$alreadyPresent = `$true; break }
   }
+  if (-not `$alreadyPresent) { `$env:Path = "`$__uvDir;`$env:Path" }
 }
+
 $end
 "@
 

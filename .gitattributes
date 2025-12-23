@@ -1,0 +1,3 @@
+*.sh = LF
+*.ps1 = CRLF
+*.md = LF

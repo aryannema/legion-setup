@@ -44,7 +44,7 @@ if ($DevRoot -like "-*") {
 }
 
 $ActionName = "install-java-windows"
-$Version    = "1.1.0"
+$Version    = "1.1.1"
 
 $LogsRoot   = "D:\aryan-setup\logs"
 $StateRoot  = "D:\aryan-setup\state-files"
@@ -57,9 +57,13 @@ function Ensure-Dir {
 }
 
 function Get-ISTStamp {
-  $tz = [TimeZoneInfo]::FindSystemTimeZoneById("India Standard Time")
-  $nowIst = [TimeZoneInfo]::ConvertTime([DateTime]::Now, $tz)
-  return ("IST {0}" -f $nowIst.ToString("dd-MM-yyyy HH:mm:ss"))
+  try {
+    $tz = [TimeZoneInfo]::FindSystemTimeZoneById("India Standard Time")
+    $nowIst = [TimeZoneInfo]::ConvertTime([DateTime]::Now, $tz)
+    return ("IST {0}" -f $nowIst.ToString("dd-MM-yyyy HH:mm:ss"))
+  } catch {
+    return ("IST {0}" -f (Get-Date).ToString("dd-MM-yyyy HH:mm:ss"))
+  }
 }
 
 function Write-Log {
@@ -180,18 +184,6 @@ function Download-File {
   throw "Download failed and curl.exe not available."
 }
 
-function Test-Java21Present {
-  param([Parameter(Mandatory=$true)][string]$JavaExe)
-  if (-not (Test-Path -LiteralPath $JavaExe)) { return $false }
-  try {
-    $out = & $JavaExe -version 2>&1
-    $txt = ($out | Out-String)
-    return ($txt -match 'version "21\.')
-  } catch {
-    return $false
-  }
-}
-
 function Remove-IfExists {
   param([Parameter(Mandatory=$true)][string]$Path)
   if (Test-Path -LiteralPath $Path) {
@@ -208,6 +200,31 @@ function Unblock-Tree {
       }
     }
   } catch { }
+}
+
+function Get-JavaVersionText {
+  param([Parameter(Mandatory=$true)][string]$JavaExe)
+
+  if (-not (Test-Path -LiteralPath $JavaExe)) { return $null }
+
+  try {
+    $out = & $JavaExe -version 2>&1
+    return (($out | Out-String).Trim())
+  } catch {
+    return ("EXCEPTION: {0}" -f $_.Exception.Message)
+  }
+}
+
+function Test-Java21Present {
+  param([Parameter(Mandatory=$true)][string]$JavaExe)
+
+  $txt = Get-JavaVersionText -JavaExe $JavaExe
+  if ([string]::IsNullOrWhiteSpace($txt)) { return $false }
+
+  # Log debug so failure diagnosis is possible without breaking idempotency.
+  Write-Log Debug ("java -version output: {0}" -f $txt.Replace("`r"," ").Replace("`n"," | "))
+
+  return ($txt -match 'version "21\.')
 }
 
 # ---------------------------
@@ -237,7 +254,7 @@ $rc = 0
 $status = "success"
 
 try {
-  if (-not (Test-Path -LiteralPath "D:\")) { throw "D:\ drive not found. Repo policy expects tools on D:\" }
+  if (-not (Test-Path -LiteralPath "D:\")) { throw "D:\ drive not found. Repo policy expects tools on D:\." }
 
   Ensure-Dir -Path $DevRoot
 
@@ -286,22 +303,17 @@ try {
     Remove-IfExists -Path $staging
     Ensure-Dir -Path $staging
 
-    Copy-Item -Path (Join-Path $picked "*") -Destination $staging -Recurse -Force
+    Copy-Item -LiteralPath (Join-Path $picked "*") -Destination $staging -Recurse -Force
     Unblock-Tree -Path $staging
 
     Remove-IfExists -Path $currentRoot
     Move-Item -LiteralPath $staging -Destination $currentRoot -Force
-
-    if (-not (Test-Path -LiteralPath $javaExe)) {
-      throw "JDK extraction completed but java.exe not found at: $javaExe"
-    }
+    Unblock-Tree -Path $currentRoot
 
     if (-not (Test-Java21Present -JavaExe $javaExe)) {
-      # One more unblock attempt in-place in case the move reintroduced MOTW inheritance.
-      Unblock-Tree -Path $currentRoot
-      if (-not (Test-Java21Present -JavaExe $javaExe)) {
-        throw "JDK install completed but Java 21 validation failed at: $javaExe"
-      }
+      $dbg = Get-JavaVersionText -JavaExe $javaExe
+      if ([string]::IsNullOrWhiteSpace($dbg)) { $dbg = "<no output>" }
+      throw "JDK install completed but Java 21 validation failed at: $javaExe. java -version output: $dbg. If this mentions being blocked, re-run -Force. If it mentions missing DLLs, install Microsoft Visual C++ Redistributable."
     }
 
     Write-Log Info "Installed Temurin JDK 21 at: $currentRoot"

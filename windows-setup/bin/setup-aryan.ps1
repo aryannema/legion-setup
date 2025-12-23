@@ -208,7 +208,12 @@ function Invoke-Action {
   Write-Log -Level Info -Message ("Running action: {0} {1}" -f $ActionName, ($finalArgs -join " "))
   Write-Log -Level Debug -Message ("Action path: {0}" -f $path)
 
-  & $path @finalArgs
+  if ($finalArgs -contains "-Force") {
+    & $path -Force
+  } else {
+    & $path @finalArgs
+  }
+  #& $path @finalArgs
   $rc = $LASTEXITCODE
 
   if ($rc -ne 0) {

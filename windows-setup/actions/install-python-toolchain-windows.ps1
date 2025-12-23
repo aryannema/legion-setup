@@ -19,15 +19,8 @@ What it does (idempotent)
 - Disables base auto-activation
 - Installs uv to: D:\dev\tools\uv
 - Pins uv cache to: D:\dev\cache\uv
-- Adds Miniconda + uv to USER PATH (safe, idempotent)
-- Writes state-file (NO JSON):
-  D:\aryan-setup\state-files\install-python-toolchain-windows.state
-
-Notes (TODO #1: toolchain reliability)
-- This script intentionally avoids "conda init" side-effects. Instead, it adds a small marker block to
-  your PowerShell profile that enables `conda activate` reliably.
-- For VS Code: project generators will create .vscode/settings.json that points to the per-project conda env.
-
+- Adds Miniconda + uv to USER PATH
+- Writes logs/state in repo-standard locations
 #>
 
 [CmdletBinding()]
@@ -36,51 +29,66 @@ param(
   [switch]$Force,
 
   [Parameter(Mandatory=$false)]
-  [string]$DevRoot = "D:\dev",
-
-  [Parameter(Mandatory=$false)]
-  [string]$CondaPrefix = "D:\dev\tools\miniconda3",
-
-  [Parameter(Mandatory=$false)]
-  [string]$UvDir = "D:\dev\tools\uv",
-
-  [Parameter(Mandatory=$false)]
   [switch]$Help
 )
 
-Set-StrictMode -Version 2
+Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-# ---------------------------
-# Identity / dirs
-# ---------------------------
 $ActionName = "install-python-toolchain-windows"
+$Version    = "1.1.2"
+
+$DevRoot     = "D:\dev"
+$ToolsRoot   = Join-Path $DevRoot "tools"
+$CacheRoot   = Join-Path $DevRoot "cache"
+$EnvsRoot    = Join-Path $DevRoot "envs"
+
+$CondaPrefix = Join-Path $ToolsRoot "miniconda3"
+$UvDir       = Join-Path $ToolsRoot "uv"
+$UvCache     = Join-Path $CacheRoot "uv"
+
 $LogsRoot   = "D:\aryan-setup\logs"
 $StateRoot  = "D:\aryan-setup\state-files"
 $LogFile    = Join-Path $LogsRoot  "$ActionName.log"
 $StateFile  = Join-Path $StateRoot "$ActionName.state"
 
-function Show-Help { Get-Help -Detailed $MyInvocation.MyCommand.Path }
+function Show-Help {
+@"
+$ActionName (version=$Version)
+
+Usage:
+  setup-aryan $ActionName -Help
+  setup-aryan $ActionName
+  setup-aryan $ActionName -Force
+"@ | Write-Host
+}
+
 if ($Help) { Show-Help; exit 0 }
 
 function Ensure-Dir {
   param([Parameter(Mandatory=$true)][string]$Path)
-  if (-not (Test-Path -LiteralPath $Path)) {
-    New-Item -ItemType Directory -Path $Path -Force | Out-Null
-  }
+  if (-not (Test-Path -LiteralPath $Path)) { New-Item -ItemType Directory -Path $Path -Force | Out-Null }
 }
 
 function Get-ISTStamp {
-  $tz = [TimeZoneInfo]::FindSystemTimeZoneById("India Standard Time")
-  $nowIst = [TimeZoneInfo]::ConvertTime([DateTime]::Now, $tz)
-  return "IST " + $nowIst.ToString("dd-MM-yyyy HH:mm:ss")
+  try {
+    $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById("India Standard Time")
+    $dt = [System.TimeZoneInfo]::ConvertTime((Get-Date), $tz)
+    return ("IST {0}" -f $dt.ToString("dd-MM-yyyy HH:mm:ss"))
+  } catch {
+    return ("IST {0}" -f (Get-Date).ToString("dd-MM-yyyy HH:mm:ss"))
+  }
 }
 
 function Write-Log {
-  param([ValidateSet("Error","Warning","Info","Debug")] [string]$Level, [string]$Message)
+  param(
+    [Parameter(Mandatory=$true)][ValidateSet("Error","Warning","Info","Debug")][string]$Level,
+    [Parameter(Mandatory=$true)][string]$Message
+  )
   Ensure-Dir -Path $LogsRoot
-  $line = "$(Get-ISTStamp) $Level $Message"
-  Add-Content -LiteralPath $LogFile -Value $line -Encoding UTF8
+  Ensure-Dir -Path $StateRoot
+  Add-Content -LiteralPath $LogFile -Value "$(Get-ISTStamp) $Level $Message" -Encoding UTF8
+
   switch ($Level) {
     "Error"   { Write-Error   $Message -ErrorAction Continue }
     "Warning" { Write-Warning $Message }
@@ -90,19 +98,19 @@ function Write-Log {
 }
 
 function Get-ISO8601 { (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssK") }
-function Get-Version { return "1.1.0" }
 
 function Read-State {
   if (-not (Test-Path -LiteralPath $StateFile)) { return $null }
   $map = @{}
-  foreach ($ln in (Get-Content -LiteralPath $StateFile -ErrorAction Stop)) {
+  $lines = Get-Content -LiteralPath $StateFile -ErrorAction Stop
+  foreach ($ln in $lines) {
     if ([string]::IsNullOrWhiteSpace($ln)) { continue }
     if ($ln.TrimStart().StartsWith("#")) { continue }
     $idx = $ln.IndexOf("=")
     if ($idx -lt 1) { continue }
     $k = $ln.Substring(0, $idx).Trim()
     $v = $ln.Substring($idx + 1).Trim()
-    if ($k.Length -gt 0) { $map[$k] = $v }
+    if ($k) { $map[$k] = $v }
   }
   return $map
 }
@@ -115,38 +123,51 @@ function Write-State {
     [Parameter(Mandatory=$true)][string]$FinishedAt
   )
   Ensure-Dir -Path $StateRoot
-  $user = [Environment]::UserName
-  $hostName = $env:COMPUTERNAME
-  $version = Get-Version
-  $content = @()
-  $content += "action=$ActionName"
-  $content += "status=$Status"
-  $content += "rc=$Rc"
-  $content += "started_at=$StartedAt"
-  $content += "finished_at=$FinishedAt"
-  $content += "user=$user"
-  $content += "host=$hostName"
-  $content += "log_path=$LogFile"
-  $content += "version=$version"
+  $content = @(
+    "status=$Status",
+    "rc=$Rc",
+    "action=$ActionName",
+    "version=$Version",
+    "started_at=$StartedAt",
+    "finished_at=$FinishedAt",
+    "force=$Force",
+    "dev_root=$DevRoot"
+  )
+  Set-Content -LiteralPath $StateFile -Value $content -Encoding UTF8
+}
 
-  $tmp = "$StateFile.tmp"
-  Set-Content -LiteralPath $tmp -Value $content -Encoding UTF8
-  Move-Item -LiteralPath $tmp -Destination $StateFile -Force
+function Ensure-UserEnvVar {
+  param(
+    [Parameter(Mandatory=$true)][string]$Name,
+    [Parameter(Mandatory=$true)][string]$Value
+  )
+  $cur = [Environment]::GetEnvironmentVariable($Name, "User")
+  if ($cur -ne $Value) {
+    [Environment]::SetEnvironmentVariable($Name, $Value, "User")
+    Write-Log Info "Set USER env var: $Name=$Value"
+  } else {
+    Write-Log Debug "USER env var already set: $Name=$Value"
+  }
 }
 
 function Add-ToUserPath {
   param([Parameter(Mandatory=$true)][string]$DirToAdd)
 
-  $current = [Environment]::GetEnvironmentVariable("Path","User")
+  $current = [Environment]::GetEnvironmentVariable("Path", "User")
   if ([string]::IsNullOrWhiteSpace($current)) { $current = "" }
 
   $parts = $current.Split(";") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
   foreach ($p in $parts) {
-    if ($p.TrimEnd("\") -ieq $DirToAdd.TrimEnd("\")) { return }
+    if ($p.TrimEnd("\") -ieq $DirToAdd.TrimEnd("\")) {
+      Write-Log Debug "USER PATH already contains: $DirToAdd"
+      return
+    }
   }
 
-  $new = if ($current.Trim().EndsWith(";") -or $current.Trim().Length -eq 0) { "$current$DirToAdd" } else { "$current;$DirToAdd" }
-  [Environment]::SetEnvironmentVariable("Path","$new","User")
+  $new = if ($current.Trim().Length -eq 0) { $DirToAdd } else { "$current;$DirToAdd" }
+  [Environment]::SetEnvironmentVariable("Path", $new, "User")
+  Write-Log Info "Added to USER PATH: $DirToAdd"
+  Write-Log Info "Open a new terminal for PATH changes to take effect."
 }
 
 function Set-Tls12 {
@@ -160,7 +181,6 @@ function Download-File {
   )
 
   Set-Tls12
-  Write-Log Info "Downloading: $Url"
 
   try {
     Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
@@ -177,61 +197,6 @@ function Download-File {
   }
 
   throw "Download failed and curl.exe not available."
-}
-
-function Ensure-Miniconda {
-  $condaExe = Join-Path $CondaPrefix "Scripts\conda.exe"
-  if (Test-Path -LiteralPath $condaExe) {
-    Write-Log Info "Miniconda already present: $CondaPrefix"
-    return $condaExe
-  }
-
-  Ensure-Dir -Path (Split-Path -Parent $CondaPrefix)
-
-  $installer = Join-Path $env:TEMP "Miniconda3-latest-Windows-x86_64.exe"
-  if (Test-Path -LiteralPath $installer) { Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue }
-
-  Download-File -Url "https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe" -OutFile $installer
-
-  Write-Log Info "Installing Miniconda to: $CondaPrefix"
-  $args = @(
-    "/InstallationType=JustMe",
-    "/AddToPath=0",
-    "/RegisterPython=0",
-    "/S",
-    "/D=$CondaPrefix"
-  )
-
-  $p = Start-Process -FilePath $installer -ArgumentList $args -Wait -PassThru
-  if ($p.ExitCode -ne 0) {
-    throw "Miniconda installer failed with exit code: $($p.ExitCode)"
-  }
-
-  if (-not (Test-Path -LiteralPath $condaExe)) {
-    throw "Miniconda install completed but conda.exe not found at: $condaExe"
-  }
-
-  Write-Log Info "Miniconda installed."
-  return $condaExe
-}
-
-function Ensure-CondaConfig {
-  param([Parameter(Mandatory=$true)][string]$CondaExePath)
-
-  $pkgs = Join-Path $DevRoot "cache\conda\pkgs"
-  $envs = Join-Path $DevRoot "envs\conda"
-
-  Ensure-Dir -Path $pkgs
-  Ensure-Dir -Path $envs
-
-  Write-Log Info "Configuring conda pkgs_dirs/envs_dirs under D:\dev (idempotent)."
-  & $CondaExePath config --set auto_activate_base false | Out-Null
-  & $CondaExePath config --set changeps1 false | Out-Null
-
-  & $CondaExePath config --add pkgs_dirs $pkgs | Out-Null
-  & $CondaExePath config --add envs_dirs $envs | Out-Null
-
-  Write-Log Info "Conda config set: pkgs_dirs=$pkgs envs_dirs=$envs auto_activate_base=false"
 }
 
 function Upsert-ProfileBlock {
@@ -267,7 +232,8 @@ function Ensure-CondaHookInProfile {
   $condaExe = Join-Path $CondaPrefix "Scripts\conda.exe"
   $uvPath   = $UvDir
 
-  # IMPORTANT: escape `$env:Path` and `$_` so they don't expand while writing the profile.
+  # IMPORTANT: This here-string is written into the user's PowerShell profile.
+  # We must escape `$` so it remains `$env:Path` at *profile runtime* (not at install time).
   $block = @"
 $begin
 # Conda PowerShell hook (idempotent). Required for reliable `conda activate` in PS 5.1.
@@ -277,7 +243,7 @@ if (Test-Path -LiteralPath "$condaExe") {
 
 # Ensure uv is reachable (installed by setup-aryan)
 if (Test-Path -LiteralPath "$uvPath") {
-  if (-not (`$env:Path -split ';' | Where-Object { `$_ -ieq "$uvPath" })) {
+  if (-not (`$env:Path -split ';' | Where-Object { `$_.TrimEnd('\') -ieq "$uvPath" })) {
     `$env:Path = "$uvPath;`$env:Path"
   }
 }
@@ -286,6 +252,67 @@ $end
 
   Upsert-ProfileBlock -ProfilePath $profilePath -Begin $begin -End $end -Block $block
   Write-Log Info "Updated PowerShell profile hook: $profilePath"
+}
+
+function Ensure-BaseDirs {
+  Ensure-Dir -Path $DevRoot
+  Ensure-Dir -Path $ToolsRoot
+  Ensure-Dir -Path $CacheRoot
+  Ensure-Dir -Path $EnvsRoot
+
+  Ensure-Dir -Path (Join-Path $CacheRoot "conda\pkgs")
+  Ensure-Dir -Path (Join-Path $EnvsRoot  "conda")
+  Ensure-Dir -Path $UvCache
+}
+
+function Ensure-Miniconda {
+  $condaExe = Join-Path $CondaPrefix "Scripts\conda.exe"
+  if (Test-Path -LiteralPath $condaExe) {
+    Write-Log Info "Miniconda already present: $condaExe"
+    return $condaExe
+  }
+
+  Ensure-Dir -Path $CondaPrefix
+
+  $installer = Join-Path $env:TEMP "Miniconda3-latest-Windows-x86_64.exe"
+  if (Test-Path -LiteralPath $installer) { Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue }
+
+  $url = "https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe"
+  Write-Log Info "Downloading: $url"
+  Download-File -Url $url -OutFile $installer
+  try { Unblock-File -LiteralPath $installer -ErrorAction SilentlyContinue } catch { }
+
+  Write-Log Info "Installing Miniconda (quiet) to: $CondaPrefix"
+  $p = Start-Process -FilePath $installer -ArgumentList @(
+    "/InstallationType=JustMe",
+    "/RegisterPython=0",
+    "/AddToPath=0",
+    "/S",
+    "/D=$CondaPrefix"
+  ) -NoNewWindow -Wait -PassThru
+
+  if ($p.ExitCode -ne 0) { throw "Miniconda installer failed with exit code: $($p.ExitCode)" }
+
+  if (-not (Test-Path -LiteralPath $condaExe)) {
+    throw "Miniconda install finished but conda.exe not found at: $condaExe"
+  }
+
+  Write-Log Info "Miniconda installed: $condaExe"
+  return $condaExe
+}
+
+function Configure-Conda {
+  $condaExe = Join-Path $CondaPrefix "Scripts\conda.exe"
+  if (-not (Test-Path -LiteralPath $condaExe)) { throw "conda.exe not found at: $condaExe" }
+
+  $pkgsDir = Join-Path $CacheRoot "conda\pkgs"
+  $envsDir = Join-Path $EnvsRoot  "conda"
+
+  Write-Log Info "Configuring conda directories..."
+  & $condaExe config --set pkgs_dirs $pkgsDir | Out-Null
+  & $condaExe config --set envs_dirs $envsDir | Out-Null
+  & $condaExe config --set auto_activate_base false | Out-Null
+  Write-Log Info "Conda configured: pkgs=$pkgsDir, envs=$envsDir, auto_activate_base=false"
 }
 
 function Ensure-Uv {
@@ -300,60 +327,48 @@ function Ensure-Uv {
   $zip = Join-Path $env:TEMP "uv-x86_64-pc-windows-msvc.zip"
   if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue }
 
-  Download-File -Url "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip" -OutFile $zip
+  $url = "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip"
+  Write-Log Info "Downloading uv ZIP: $url"
+  Download-File -Url $url -OutFile $zip
+  try { Unblock-File -LiteralPath $zip -ErrorAction SilentlyContinue } catch { }
 
-  Write-Log Info "Extracting uv to: $UvDir"
-  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  $tmp = Join-Path $env:TEMP "setup-aryan-uv"
+  if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+  Ensure-Dir -Path $tmp
 
-  try {
-    [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $UvDir)
-  } catch {
-    # If partial extraction happened, try again with overwrite semantics by extracting to temp and copying.
-    $tmp = Join-Path $env:TEMP "uv-extract"
-    if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
-    Ensure-Dir -Path $tmp
-    [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $tmp)
-    Copy-Item -Path (Join-Path $tmp "*") -Destination $UvDir -Recurse -Force
-  }
+  Expand-Archive -LiteralPath $zip -DestinationPath $tmp -Force
 
-  if (-not (Test-Path -LiteralPath $uvExe)) {
-    $found = Get-ChildItem -LiteralPath $UvDir -Recurse -Filter "uv.exe" -File -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($found) { Copy-Item -LiteralPath $found.FullName -Destination $uvExe -Force }
-  }
+  $found = Get-ChildItem -LiteralPath $tmp -Recurse -File -Filter "uv.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $found) { throw "uv.exe not found inside extracted archive." }
 
-  if (-not (Test-Path -LiteralPath $uvExe)) {
-    throw "uv.exe not found after extract. Check: $UvDir"
-  }
+  Copy-Item -LiteralPath $found.FullName -Destination $uvExe -Force
+
+  if (-not (Test-Path -LiteralPath $uvExe)) { throw "Failed to install uv.exe to: $uvExe" }
 
   Write-Log Info "uv installed: $uvExe"
   return $uvExe
 }
 
-function Ensure-UserEnvVar {
-  param([Parameter(Mandatory=$true)][string]$Name, [Parameter(Mandatory=$true)][string]$Value)
-  $cur = [Environment]::GetEnvironmentVariable($Name, "User")
-  if ($cur -ne $Value) {
-    [Environment]::SetEnvironmentVariable($Name, $Value, "User")
-    Write-Log Info "Set USER env var: $Name=$Value"
-  } else {
-    Write-Log Debug "USER env var already set: $Name"
-  }
+function Pin-UvCache {
+  Ensure-UserEnvVar -Name "UV_CACHE_DIR" -Value $UvCache
+  Write-Log Info "Pinned UV_CACHE_DIR=$UvCache"
+}
+
+function Pin-Paths {
+  Add-ToUserPath -DirToAdd (Join-Path $CondaPrefix "Scripts")
+  Add-ToUserPath -DirToAdd (Join-Path $CondaPrefix "condabin")
+  Add-ToUserPath -DirToAdd $UvDir
 }
 
 # ---------------------------
 # Main
 # ---------------------------
-if (-not (Test-Path -LiteralPath "D:\")) {
-  Write-Error "D:\ drive not found. Repo policy expects dev/log/state on D:\."
-  exit 1
-}
-
-Ensure-Dir -Path $LogsRoot
-Ensure-Dir -Path $StateRoot
-
 $startedAt = Get-ISO8601
+$rc = 0
+$status = "success"
 
-# Idempotency via state-file
+Write-Log Info "Starting: $ActionName (version=$Version, Force=$Force)"
+
 try {
   $prev = Read-State
   if ($prev -ne $null -and -not $Force) {
@@ -367,35 +382,18 @@ try {
   Write-Log Warning "Could not read prior state (continuing): $($_.Exception.Message)"
 }
 
-$rc = 0
-$status = "success"
-
 try {
-  Ensure-Dir -Path $DevRoot
-  Ensure-Dir -Path (Join-Path $DevRoot "tools")
-  Ensure-Dir -Path (Join-Path $DevRoot "cache")
-  Ensure-Dir -Path (Join-Path $DevRoot "envs")
+  if (-not (Test-Path -LiteralPath "D:\")) { throw "D:\ drive not found. Repo policy expects tools on D:\" }
 
-  $condaExe = Ensure-Miniconda
-  Ensure-CondaConfig -CondaExePath $condaExe
-
-  $uvExe = Ensure-Uv
-
-  Ensure-UserEnvVar -Name "UV_CACHE_DIR" -Value (Join-Path $DevRoot "cache\uv")
-  Ensure-Dir -Path (Join-Path $DevRoot "cache\uv")
-
-  Add-ToUserPath -DirToAdd (Join-Path $CondaPrefix "Scripts")
-  Add-ToUserPath -DirToAdd (Join-Path $CondaPrefix "condabin")
-  Add-ToUserPath -DirToAdd $UvDir
-
+  Ensure-BaseDirs
+  Ensure-Miniconda | Out-Null
+  Configure-Conda
+  Ensure-Uv | Out-Null
+  Pin-UvCache
+  Pin-Paths
   Ensure-CondaHookInProfile
 
-  Write-Log Info "Verification checks"
-  & $condaExe --version | Out-Null
-  & $uvExe --version | Out-Null
-
-  Write-Log Info "Python toolchain ready."
-  Write-Log Info "Open a NEW PowerShell for PATH/profile changes to apply."
+  Write-Log Info "Done. Open a NEW terminal and run: conda --version ; uv --version"
 } catch {
   $rc = 1
   $status = "failed"
@@ -403,6 +401,6 @@ try {
 }
 
 $finishedAt = Get-ISO8601
-try { Write-State -Status $status -Rc $rc -StartedAt $startedAt -FinishedAt $finishedAt } catch {}
+try { Write-State -Status $status -Rc $rc -StartedAt $startedAt -FinishedAt $finishedAt } catch { Write-Log Warning "Failed to write state file: $($_.Exception.Message)" }
 
 exit $rc

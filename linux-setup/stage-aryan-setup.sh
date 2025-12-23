@@ -1,190 +1,222 @@
 #!/usr/bin/env bash
-set -euo pipefail
-
-# ==============================================================================
 # stage-aryan-setup.sh
 #
-# Purpose:
-#   Idempotently stage Linux "setup-aryan" framework + action scripts from this
-#   repo into system locations:
-#     - /usr/local/aryan-setup/
-#     - /usr/local/bin/setup-aryan        (symlink)
-#     - /usr/local/bin/setup-aryan-log    (symlink)
-#     - /etc/bash_completion.d/setup-aryan
-#     - /var/log/setup-aryan/ (logs)
-#     - /var/log/setup-aryan/state-files/ (state)
-#
 # Prerequisites:
-#   - Ubuntu 24.04+ (or compatible)
-#   - bash, coreutils
-#   - sudo/root (required)
+# - Ubuntu 24.04+ recommended
+# - bash, coreutils
+# - sudo privileges (required to write to /opt, /usr/local/bin, /var/log)
 #
 # Usage:
-#   sudo bash ./linux-setup/stage-aryan-setup.sh
-#   sudo bash ./linux-setup/stage-aryan-setup.sh --help
+#   ./linux-setup/stage-aryan-setup.sh [--force] [--target-root /opt/aryan-setup] [--help]
 #
-# Notes:
-#   - This script is safe to run multiple times (idempotent).
-#   - It copies scripts from this repo's linux-setup/{bin,actions,completions}.
-# ==============================================================================
+# What it does:
+# - Stages this repo's linux-setup/bin, linux-setup/actions, linux-setup/completions into TARGET_ROOT (default /opt/aryan-setup)
+# - Installs wrapper commands:
+#     /usr/local/bin/setup-aryan
+#     /usr/local/bin/setup-aryan-log
+# - Ensures:
+#     /var/log/setup-aryan/
+#     /var/log/setup-aryan/state-files/
+# - Writes state file (NO JSON):
+#     /var/log/setup-aryan/state-files/stage-linux-setup.state
 
-SCRIPT_NAME="stage-aryan-setup"
-TZ_NAME="Asia/Kolkata"
+set -euo pipefail
 
-log_dir="/var/log/setup-aryan"
-state_dir="${log_dir}/state-files"
-system_root="/usr/local/aryan-setup"
-system_bin="${system_root}/bin"
-system_actions="${system_root}/actions"
-system_completions="${system_root}/completions"
-system_log_link="/var/log/aryan-setup"      # compatibility link (optional)
-system_state_link="/var/log/aryan-setup/state-files"
+ACTION="stage-linux-setup"
+VERSION="1.1.0"
 
-print_help() {
-  cat <<EOF
-${SCRIPT_NAME}
+TARGET_ROOT="/opt/aryan-setup"
+LOG_ROOT="/var/log/setup-aryan"
+STATE_ROOT="/var/log/setup-aryan/state-files"
+LOG_PATH="${LOG_ROOT}/${ACTION}.log"
+STATE_PATH="${STATE_ROOT}/${ACTION}.state"
 
-Stages the repo's linux-setup framework into:
-  - ${system_root}
-  - /usr/local/bin/setup-aryan
-  - /usr/local/bin/setup-aryan-log
-  - /etc/bash_completion.d/setup-aryan
-  - ${log_dir}
-  - ${state_dir}
+FORCE="false"
+
+usage() {
+  cat <<'USAGE'
+stage-aryan-setup.sh (Linux)
+
+Prerequisites:
+- sudo privileges (required)
+- Repo cloned locally
 
 Usage:
-  sudo bash ./linux-setup/stage-aryan-setup.sh
+  ./linux-setup/stage-aryan-setup.sh [--force] [--target-root /opt/aryan-setup]
+  ./linux-setup/stage-aryan-setup.sh --help
 
-EOF
+Options:
+  --force                 Re-stage even if previous success is recorded
+  --target-root <path>    Stage root (default: /opt/aryan-setup)
+  -h, --help              Show this help
+USAGE
 }
 
-ts() { TZ="${TZ_NAME}" date "+%Z %d-%m-%Y %H:%M:%S"; }
-log() { echo "$(ts) INFO ${SCRIPT_NAME}: $*"; }
-warn() { echo "$(ts) WARNING ${SCRIPT_NAME}: $*" >&2; }
-err() { echo "$(ts) ERROR ${SCRIPT_NAME}: $*" >&2; }
+ist_stamp() {
+  TZ="Asia/Kolkata" date '+IST %d-%m-%Y %H:%M:%S'
+}
 
-require_root() {
-  if [[ "${EUID}" -ne 0 ]]; then
-    err "Must be run as root (use sudo)."
+log_line() {
+  local level="$1"; shift
+  local msg="$*"
+  mkdir -p "${LOG_ROOT}" >/dev/null 2>&1 || true
+  printf '%s %s %s\n' "$(ist_stamp)" "${level}" "${msg}" | tee -a "${LOG_PATH}" >/dev/null
+}
+
+need_root() {
+  if [[ "$(id -u)" -ne 0 ]]; then
+    echo "ERROR: This script must run with sudo/root (needs /opt, /usr/local/bin, /var/log)." >&2
+    echo "Run: sudo $0 $*" >&2
     exit 1
   fi
 }
 
-repo_root() {
-  # Resolve repo root robustly: script path -> parent of linux-setup
-  local here
-  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  cd "${here}/.." && pwd
+ensure_dirs() {
+  mkdir -p "${TARGET_ROOT}" "${LOG_ROOT}" "${STATE_ROOT}"
 }
 
-ensure_dir() {
-  local d="$1" mode="${2:-}"
-  if [[ ! -d "${d}" ]]; then
-    mkdir -p "${d}"
-  fi
-  if [[ -n "${mode}" ]]; then
-    chmod "${mode}" "${d}" || true
-  fi
+read_state_kv() {
+  local path="$1"
+  [[ -f "$path" ]] || return 1
+  # shellcheck disable=SC1090
+  source <(sed -n 's/^\([a-zA-Z0-9_]\+\)=\(.*\)$/\1="\2"/p' "$path")
 }
 
-copy_tree_idempotent() {
-  local src="$1" dst="$2"
-  ensure_dir "${dst}"
-  if [[ -d "${src}" ]]; then
-    # Copy files preserving mode/time; remove deleted files? (NO) — safe staging.
-    # We copy/overwrite only.
-    cp -a "${src}/." "${dst}/"
-  fi
+write_state_kv() {
+  local status="$1"
+  local rc="$2"
+  local started_at="$3"
+  local finished_at="$4"
+  local user="$5"
+  local host="$6"
+  local log_path="$7"
+  local version="$8"
+
+  local tmp="${STATE_PATH}.tmp"
+  cat > "${tmp}" <<EOF
+action=${ACTION}
+status=${status}
+rc=${rc}
+started_at=${started_at}
+finished_at=${finished_at}
+user=${user}
+host=${host}
+log_path=${log_path}
+version=${version}
+target_root=${TARGET_ROOT}
+EOF
+  mv -f "${tmp}" "${STATE_PATH}"
 }
 
-safe_symlink() {
-  local target="$1" linkpath="$2"
-  if [[ -L "${linkpath}" ]]; then
-    local cur
-    cur="$(readlink -f "${linkpath}" || true)"
-    if [[ "${cur}" == "$(readlink -f "${target}")" ]]; then
-      return 0
-    fi
-    rm -f "${linkpath}"
-  elif [[ -e "${linkpath}" ]]; then
-    warn "Not overwriting existing non-symlink: ${linkpath}"
-    return 0
-  fi
-  ln -s "${target}" "${linkpath}"
+copy_tree() {
+  local src="$1"
+  local dst="$2"
+  mkdir -p "$dst"
+  # Idempotent: overwrite staged contents
+  rsync -a --delete "${src}/" "${dst}/"
+}
+
+install_wrapper() {
+  local name="$1"
+  local content="$2"
+  local path="/usr/local/bin/${name}"
+  local tmp="${path}.tmp"
+  printf '%s\n' "${content}" > "${tmp}"
+  chmod 0755 "${tmp}"
+  mv -f "${tmp}" "${path}"
+}
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force) FORCE="true"; shift ;;
+      --target-root)
+        TARGET_ROOT="${2:-}"
+        if [[ -z "${TARGET_ROOT}" ]]; then echo "ERROR: --target-root requires a value" >&2; exit 1; fi
+        shift 2
+        ;;
+      -h|--help) usage; exit 0 ;;
+      *)
+        echo "ERROR: Unknown argument: $1" >&2
+        usage
+        exit 1
+        ;;
+    esac
+  done
 }
 
 main() {
-  if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-    print_help
-    exit 0
+  parse_args "$@"
+  need_root "$@"
+
+  ensure_dirs
+
+  local started_at finished_at user host rc status
+  started_at="$(date --iso-8601=seconds)"
+  user="$(logname 2>/dev/null || echo "${SUDO_USER:-root}")"
+  host="$(hostname)"
+  rc=0
+  status="success"
+
+  log_line "Info" "Starting ${ACTION} (version=${VERSION})"
+  log_line "Info" "TARGET_ROOT=${TARGET_ROOT}"
+  log_line "Info" "LOG_ROOT=${LOG_ROOT}"
+  log_line "Info" "STATE_ROOT=${STATE_ROOT}"
+  log_line "Info" "FORCE=${FORCE}"
+
+  if [[ -f "${STATE_PATH}" && "${FORCE}" != "true" ]]; then
+    # If last run succeeded, skip.
+    if read_state_kv "${STATE_PATH}" && [[ "${status:-}" == "success" ]]; then
+      log_line "Info" "Previous success recorded; skipping. Use --force to re-run."
+      finished_at="$(date --iso-8601=seconds)"
+      write_state_kv "skipped" 0 "${started_at}" "${finished_at}" "${user}" "${host}" "${LOG_PATH}" "${VERSION}"
+      exit 0
+    fi
   fi
 
-  require_root
+  local repo_root script_dir src_base
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  repo_root="$(cd "${script_dir}/.." && pwd)"
+  src_base="${repo_root}/linux-setup"
 
-  local root user home
-  root="$(repo_root)"
-
-  user="${SUDO_USER:-aryan}"
-  home="$(getent passwd "${user}" | cut -d: -f6 || true)"
-  if [[ -z "${home}" ]]; then
-    home="/home/${user}"
+  if [[ ! -d "${src_base}" ]]; then
+    log_line "Error" "Expected linux-setup directory not found at: ${src_base}"
+    rc=1
+    status="failed"
+    finished_at="$(date --iso-8601=seconds)"
+    write_state_kv "${status}" "${rc}" "${started_at}" "${finished_at}" "${user}" "${host}" "${LOG_PATH}" "${VERSION}"
+    exit "${rc}"
   fi
 
-  log "Repo root: ${root}"
-  log "Target user: ${user} (home: ${home})"
+  log_line "Info" "Staging bin/actions/completions into ${TARGET_ROOT}"
+  mkdir -p "${TARGET_ROOT}/bin" "${TARGET_ROOT}/actions" "${TARGET_ROOT}/completions"
 
-  # System directories
-  ensure_dir "${system_root}" 0755
-  ensure_dir "${system_bin}" 0755
-  ensure_dir "${system_actions}" 0755
-  ensure_dir "${system_completions}" 0755
-
-  # Log/state directories (make user-owned as requested)
-  ensure_dir "${log_dir}" 0750
-  ensure_dir "${state_dir}" 0750
-  chown -R "${user}:${user}" "${log_dir}" || true
-
-  # Compatibility symlink /var/log/aryan-setup -> /var/log/setup-aryan
-  if [[ -e "${system_log_link}" && ! -L "${system_log_link}" ]]; then
-    warn "Path exists and is not a symlink; leaving as-is: ${system_log_link}"
-  else
-    ln -sfn "${log_dir}" "${system_log_link}"
+  # Use rsync --delete to ensure staged tree matches repo (idempotent).
+  if [[ -d "${src_base}/bin" ]]; then
+    copy_tree "${src_base}/bin" "${TARGET_ROOT}/bin"
   fi
-  if [[ -e "${system_state_link}" && ! -L "${system_state_link}" ]]; then
-    warn "Path exists and is not a symlink; leaving as-is: ${system_state_link}"
-  else
-    ln -sfn "${state_dir}" "${system_state_link}"
+  if [[ -d "${src_base}/actions" ]]; then
+    copy_tree "${src_base}/actions" "${TARGET_ROOT}/actions"
+  fi
+  if [[ -d "${src_base}/completions" ]]; then
+    copy_tree "${src_base}/completions" "${TARGET_ROOT}/completions"
   fi
 
-  # Copy staged content from repo
-  copy_tree_idempotent "${root}/linux-setup/bin" "${system_bin}"
-  copy_tree_idempotent "${root}/linux-setup/actions" "${system_actions}"
-  copy_tree_idempotent "${root}/linux-setup/completions" "${system_completions}"
+  # Install wrapper scripts (not symlinks)
+  install_wrapper "setup-aryan" "#!/usr/bin/env bash
+exec \"${TARGET_ROOT}/bin/setup-aryan\" \"\$@\"
+"
+  install_wrapper "setup-aryan-log" "#!/usr/bin/env bash
+exec \"${TARGET_ROOT}/bin/setup-aryan-log\" \"\$@\"
+"
 
-  # Ensure wrappers executable
-  if [[ -f "${system_bin}/setup-aryan" ]]; then chmod +x "${system_bin}/setup-aryan" || true; fi
-  if [[ -f "${system_bin}/setup-aryan-log" ]]; then chmod +x "${system_bin}/setup-aryan-log" || true; fi
-  find "${system_actions}" -type f -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
+  log_line "Info" "Installed wrappers:"
+  log_line "Info" "  /usr/local/bin/setup-aryan"
+  log_line "Info" "  /usr/local/bin/setup-aryan-log"
+  log_line "Info" "Done. Try: setup-aryan list"
 
-  # Install bash completion
-  if [[ -f "${system_completions}/setup-aryan.bash" ]]; then
-    ensure_dir "/etc/bash_completion.d" 0755
-    cp -a "${system_completions}/setup-aryan.bash" "/etc/bash_completion.d/setup-aryan"
-    chmod 0644 "/etc/bash_completion.d/setup-aryan" || true
-  else
-    warn "Missing completion file: ${system_completions}/setup-aryan.bash"
-  fi
-
-  # Symlink wrappers into PATH
-  safe_symlink "${system_bin}/setup-aryan" "/usr/local/bin/setup-aryan"
-  safe_symlink "${system_bin}/setup-aryan-log" "/usr/local/bin/setup-aryan-log"
-
-  log "Staging complete."
-  log "Try:"
-  log "  setup-aryan list"
-  log "  setup-aryan validate-linux-gpu"
-  log "  setup-aryan recover-linux-gui-igpu-deb"
-  log "Logs: ${log_dir}"
+  finished_at="$(date --iso-8601=seconds)"
+  write_state_kv "${status}" "${rc}" "${started_at}" "${finished_at}" "${user}" "${host}" "${LOG_PATH}" "${VERSION}"
 }
 
 main "$@"

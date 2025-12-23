@@ -1,199 +1,137 @@
 #!/usr/bin/env bash
-set -euo pipefail
-
-# ==============================================================================
 # install-vscode-linux.sh
 #
 # Prerequisites:
-#   - Ubuntu 24.04.x
-#   - sudo access
-#   - curl, gpg, apt
+# - Ubuntu 24.04+
+# - sudo privileges
+# - curl, gpg
 #
 # Usage:
-#   setup-aryan install-vscode-linux
-#   OR run directly:
-#     ./install-vscode-linux.sh [--portable-dirs]
+#   setup-aryan install-vscode-linux [--force] [--help]
 #
-# Flags:
-#   --portable-dirs   Create a "self-contained" user profile/extension location
-#                    under ~/dev/envs/vscode and a launcher helper.
-#
-# Logging:
-#   - Logs to: /var/log/setup-aryan/install-vscode-linux.log
-#   - State to: /var/log/setup-aryan/state-files/install-vscode-linux.state
-# ==============================================================================
+# Notes:
+# - Adds Microsoft apt repo (idempotent)
+# - Installs "code" package
 
-ACTION_NAME="install-vscode-linux"
-LOG_DIR="/var/log/setup-aryan"
-STATE_DIR="/var/log/setup-aryan/state-files"
-LOG_FILE="${LOG_DIR}/${ACTION_NAME}.log"
-STATE_FILE="${STATE_DIR}/${ACTION_NAME}.state"
+set -euo pipefail
 
-ts() { TZ="Asia/Kolkata" date '+%Z %d-%m-%Y %H:%M:%S'; }
-log() {
-  local level="$1"; shift
-  local msg="$*"
-  mkdir -p "$LOG_DIR" "$STATE_DIR"
-  printf '%s %s %s\n' "$(ts)" "$level" "$msg" | tee -a "$LOG_FILE" >/dev/null
-}
-die() { log "Error" "$*"; exit 1; }
+ACTION="install-vscode-linux"
+VERSION="1.1.0"
 
-ensure_root() {
-  if [[ "${EUID}" -ne 0 ]]; then
-    exec sudo -E bash "$0" "$@"
-  fi
-}
+LOG_ROOT="/var/log/setup-aryan"
+STATE_ROOT="/var/log/setup-aryan/state-files"
+LOG_PATH="${LOG_ROOT}/${ACTION}.log"
+STATE_PATH="${STATE_ROOT}/${ACTION}.state"
 
-TARGET_USER="${SUDO_USER:-$USER}"
-TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
-PORTABLE_DIRS="false"
+FORCE="false"
 
 usage() {
-  cat <<EOF
-${ACTION_NAME}
+  cat <<'USAGE'
+install-vscode-linux.sh
+
+Prerequisites:
+- Ubuntu 24.04+
+- sudo privileges
+- curl, gpg
 
 Usage:
-  ${ACTION_NAME} [--portable-dirs]
-  ${ACTION_NAME} --help
+  setup-aryan install-vscode-linux [--force]
+  setup-aryan install-vscode-linux --help
 
-Flags:
-  --portable-dirs   Create VS Code profile/extension dirs under:
-                    ${TARGET_HOME}/dev/envs/vscode
+Installs:
+- Visual Studio Code (code)
+USAGE
+}
+
+ist_stamp() { TZ="Asia/Kolkata" date '+IST %d-%m-%Y %H:%M:%S'; }
+
+log_line() {
+  local level="$1"; shift
+  local msg="$*"
+  sudo mkdir -p "${LOG_ROOT}" "${STATE_ROOT}" >/dev/null 2>&1 || true
+  printf '%s %s %s\n' "$(ist_stamp)" "${level}" "${msg}" | sudo tee -a "${LOG_PATH}" >/dev/null
+}
+
+read_state_kv() {
+  local path="$1"
+  [[ -f "$path" ]] || return 1
+  # shellcheck disable=SC1090
+  source <(sudo sed -n 's/^\([a-zA-Z0-9_]\+\)=\(.*\)$/\1="\2"/p' "$path")
+}
+
+write_state_kv() {
+  local status="$1" rc="$2" started_at="$3" finished_at="$4" user="$5" host="$6" log_path="$7" version="$8"
+  local tmp="/tmp/${ACTION}.state.$$"
+  cat > "${tmp}" <<EOF
+action=${ACTION}
+status=${status}
+rc=${rc}
+started_at=${started_at}
+finished_at=${finished_at}
+user=${user}
+host=${host}
+log_path=${log_path}
+version=${version}
 EOF
+  sudo mv -f "${tmp}" "${STATE_PATH}"
 }
 
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --portable-dirs) PORTABLE_DIRS="true"; shift ;;
+      --force) FORCE="true"; shift ;;
       -h|--help) usage; exit 0 ;;
-      *) die "Unknown argument: $1 (use --help)" ;;
+      *) echo "ERROR: Unknown argument: $1" >&2; usage; exit 1 ;;
     esac
   done
 }
 
-require_cmd() {
-  local c="$1"
-  command -v "$c" >/dev/null 2>&1 || die "Missing prerequisite command: $c"
-}
-
-install_prereqs() {
-  log "Info" "Installing prerequisites (if needed)..."
-  apt-get update -y
-  apt-get install -y --no-install-recommends ca-certificates curl gnupg apt-transport-https
-}
-
-setup_vscode_repo() {
-  local keyring="/usr/share/keyrings/microsoft-vscode.gpg"
-  local listfile="/etc/apt/sources.list.d/vscode.list"
-
-  log "Info" "Ensuring Microsoft VS Code apt repo is configured..."
-  mkdir -p /usr/share/keyrings
-
-  if [[ ! -f "$keyring" ]]; then
-    log "Info" "Adding Microsoft keyring: $keyring"
-    curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
-      | gpg --dearmor \
-      | tee "$keyring" >/dev/null
-    chmod 0644 "$keyring"
-  else
-    log "Debug" "Keyring already present: $keyring"
-  fi
-
-  # Ensure the repo line exists and is correct
-  local repo_line="deb [arch=amd64 signed-by=${keyring}] https://packages.microsoft.com/repos/code stable main"
-  if [[ ! -f "$listfile" ]] || ! grep -Fq "$repo_line" "$listfile"; then
-    log "Info" "Writing repo file: $listfile"
-    printf '%s\n' "$repo_line" > "$listfile"
-    chmod 0644 "$listfile"
-  else
-    log "Debug" "Repo file already correct: $listfile"
-  fi
-}
-
-install_vscode() {
-  if dpkg -s code >/dev/null 2>&1; then
-    log "Info" "VS Code is already installed (dpkg reports 'code')."
-    return 0
-  fi
-
-  log "Info" "Installing VS Code (package: code)..."
-  apt-get update -y
-  apt-get install -y code
-}
-
-create_portableish_dirs() {
-  log "Info" "Configuring 'portable-ish' VS Code profile dirs for user: ${TARGET_USER}"
-
-  local base="${TARGET_HOME}/dev/envs/vscode"
-  local user_data="${base}/user-data"
-  local extensions="${base}/extensions"
-  local wrapper="${TARGET_HOME}/.local/bin/code-homedirs"
-
-  # Ensure directories exist and are owned by the user
-  install -d -m 0755 -o "$TARGET_USER" -g "$TARGET_USER" "$user_data" "$extensions" "${TARGET_HOME}/.local/bin"
-
-  # Wrapper ensures absolute paths (desktop entries do NOT reliably expand \$HOME)
-  cat > "$wrapper" <<EOF
-#!/usr/bin/env bash
-exec /usr/bin/code --user-data-dir="${user_data}" --extensions-dir="${extensions}" "\$@"
-EOF
-  chmod 0755 "$wrapper"
-  chown "$TARGET_USER:$TARGET_USER" "$wrapper"
-
-  # Desktop entry (user-local)
-  local desktop_dir="${TARGET_HOME}/.local/share/applications"
-  local desktop_file="${desktop_dir}/code-homedirs.desktop"
-  install -d -m 0755 -o "$TARGET_USER" -g "$TARGET_USER" "$desktop_dir"
-
-  cat > "$desktop_file" <<EOF
-[Desktop Entry]
-Name=VS Code (Home Dirs)
-Comment=VS Code with profile/extensions pinned under ${TARGET_HOME}/dev/envs/vscode
-Exec=${wrapper} %F
-Icon=code
-Type=Application
-Categories=Development;IDE;
-Terminal=false
-EOF
-  chown "$TARGET_USER:$TARGET_USER" "$desktop_file"
-  chmod 0644 "$desktop_file"
-
-  log "Info" "Portable-ish launcher created: ${desktop_file}"
-}
-
-write_state() {
-  cat > "$STATE_FILE" <<EOF
-installed=true
-portable_dirs=${PORTABLE_DIRS}
-timestamp="$(ts)"
-EOF
-  chmod 0644 "$STATE_FILE"
-  log "Debug" "State updated: $STATE_FILE"
-}
-
 main() {
-  ensure_root "$@"
   parse_args "$@"
 
-  require_cmd apt-get
-  require_cmd curl
-  require_cmd gpg
+  local started_at finished_at user host rc status
+  started_at="$(date --iso-8601=seconds)"
+  user="$(id -un)"
+  host="$(hostname)"
+  rc=0
+  status="success"
 
-  log "Info" "Starting ${ACTION_NAME} (target user: ${TARGET_USER})"
-  install_prereqs
-  setup_vscode_repo
-  install_vscode
+  log_line "Info" "Starting ${ACTION} (version=${VERSION}) FORCE=${FORCE}"
 
-  if [[ "$PORTABLE_DIRS" == "true" ]]; then
-    create_portableish_dirs
-  else
-    log "Info" "Portable-ish dirs not requested; leaving VS Code default profile in /home."
+  if [[ -f "${STATE_PATH}" && "${FORCE}" != "true" ]]; then
+    if read_state_kv "${STATE_PATH}" && [[ "${status:-}" == "success" ]]; then
+      log_line "Info" "Previous success recorded; skipping. Use --force to re-run."
+      finished_at="$(date --iso-8601=seconds)"
+      write_state_kv "skipped" 0 "${started_at}" "${finished_at}" "${user}" "${host}" "${LOG_PATH}" "${VERSION}"
+      exit 0
+    fi
   fi
 
-  write_state
-  log "Info" "Done: ${ACTION_NAME}"
+  if command -v code >/dev/null 2>&1 && [[ "${FORCE}" != "true" ]]; then
+    log_line "Info" "VS Code already present (code). Use --force to re-run."
+    finished_at="$(date --iso-8601=seconds)"
+    write_state_kv "skipped" 0 "${started_at}" "${finished_at}" "${user}" "${host}" "${LOG_PATH}" "${VERSION}"
+    exit 0
+  fi
+
+  log_line "Info" "Installing dependencies"
+  sudo apt-get update -y
+  sudo apt-get install -y wget gpg apt-transport-https
+
+  log_line "Info" "Configuring Microsoft apt repo (idempotent)"
+  sudo mkdir -p /etc/apt/keyrings
+  wget -qO- https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor | sudo tee /etc/apt/keyrings/packages.microsoft.gpg >/dev/null
+
+  echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/packages.microsoft.gpg] https://packages.microsoft.com/repos/code stable main" \
+    | sudo tee /etc/apt/sources.list.d/vscode.list >/dev/null
+
+  sudo apt-get update -y
+  sudo apt-get install -y code
+
+  log_line "Info" "VS Code version: $(code --version 2>/dev/null | head -n 1 || echo unknown)"
+
+  finished_at="$(date --iso-8601=seconds)"
+  write_state_kv "${status}" "${rc}" "${started_at}" "${finished_at}" "${user}" "${host}" "${LOG_PATH}" "${VERSION}"
 }
 
 main "$@"
-

@@ -1,258 +1,205 @@
 #!/usr/bin/env bash
-set -euo pipefail
-
-# ==============================================================================
 # new-node-project-linux.sh
 #
 # Prerequisites:
-#   - Ubuntu 24.04.x
-#   - Node toolchain action already run (Node + pnpm recommended)
+# - node + pnpm available
+#   (Recommended: setup-aryan install-node-toolchain-linux)
 #
 # Usage:
-#   setup-aryan new-node-project-linux --name <project_name> [--dir <base_dir>]
+#   setup-aryan new-node-project-linux --name myapp [--projects-root ~/dev/projects] [--force] [--help]
 #
-# Output:
-#   - README.md + Quick Start
-#   - project_config.yaml
-#   - package.json
-#   - src/index.js
-#   - scripts/dev.sh, scripts/run.sh, scripts/test.sh
-#   - .gitignore
-#
-# Logging:
-#   - Logs to: /var/log/setup-aryan/new-node-project-linux.log
-#   - State to: /var/log/setup-aryan/state-files/new-node-project-linux.state
-# ==============================================================================
+# Notes:
+# - This action NEVER "skips" based on the action state file (you can create many projects).
+# - It still writes a state file recording the last project created.
 
-ACTION_NAME="new-node-project-linux"
-LOG_DIR="/var/log/setup-aryan"
-STATE_DIR="/var/log/setup-aryan/state-files"
-LOG_FILE="${LOG_DIR}/${ACTION_NAME}.log"
-STATE_FILE="${STATE_DIR}/${ACTION_NAME}.state"
+set -euo pipefail
 
-ts() { TZ="Asia/Kolkata" date '+%Z %d-%m-%Y %H:%M:%S'; }
-log() {
-  local level="$1"; shift
-  local msg="$*"
-  mkdir -p "$LOG_DIR" "$STATE_DIR"
-  printf '%s %s %s\n' "$(ts)" "$level" "$msg" | tee -a "$LOG_FILE" >/dev/null
-}
-die() { log "Error" "$*"; exit 1; }
+ACTION="new-node-project-linux"
+VERSION="1.1.0"
 
-ensure_root() {
-  if [[ "${EUID}" -ne 0 ]]; then
-    exec sudo -E bash "$0" "$@"
-  fi
-}
-
-TARGET_USER="${SUDO_USER:-$USER}"
-TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
+LOG_ROOT="/var/log/setup-aryan"
+STATE_ROOT="/var/log/setup-aryan/state-files"
+LOG_PATH="${LOG_ROOT}/${ACTION}.log"
+STATE_PATH="${STATE_ROOT}/${ACTION}.state"
 
 NAME=""
-BASE_DIR="${TARGET_HOME}/dev/projects"
+PROJECTS_ROOT="${HOME}/dev/projects"
+FORCE="false"
 
 usage() {
-  cat <<EOF
-${ACTION_NAME}
+  cat <<'USAGE'
+new-node-project-linux.sh
+
+Prerequisites:
+- node + pnpm available (recommended: setup-aryan install-node-toolchain-linux)
 
 Usage:
-  ${ACTION_NAME} --name <project_name> [--dir <base_dir>]
-  ${ACTION_NAME} --help
+  setup-aryan new-node-project-linux --name <project> [--projects-root <dir>] [--force]
+  setup-aryan new-node-project-linux --help
+
+Creates:
+- src/index.js
+- scripts/dev.sh
+- scripts/run.sh
+- package.json
+- README.md
+USAGE
+}
+
+ist_stamp() { TZ="Asia/Kolkata" date '+IST %d-%m-%Y %H:%M:%S'; }
+
+log_line() {
+  local level="$1"; shift
+  local msg="$*"
+  sudo mkdir -p "${LOG_ROOT}" "${STATE_ROOT}" >/dev/null 2>&1 || true
+  printf '%s %s %s\n' "$(ist_stamp)" "${level}" "${msg}" | sudo tee -a "${LOG_PATH}" >/dev/null
+}
+
+write_state_kv() {
+  local status="$1" rc="$2" started_at="$3" finished_at="$4" user="$5" host="$6" log_path="$7" version="$8" project_dir="$9"
+  local tmp="/tmp/${ACTION}.state.$$"
+  cat > "${tmp}" <<EOF
+action=${ACTION}
+status=${status}
+rc=${rc}
+started_at=${started_at}
+finished_at=${finished_at}
+user=${user}
+host=${host}
+log_path=${log_path}
+version=${version}
+project=${NAME}
+project_dir=${project_dir}
 EOF
+  sudo mv -f "${tmp}" "${STATE_PATH}"
 }
 
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --name) NAME="${2:-}"; shift 2 ;;
-      --dir)  BASE_DIR="${2:-}"; shift 2 ;;
+      --projects-root) PROJECTS_ROOT="${2:-}"; shift 2 ;;
+      --force) FORCE="true"; shift ;;
       -h|--help) usage; exit 0 ;;
-      *) die "Unknown argument: $1 (use --help)" ;;
+      *) echo "ERROR: Unknown argument: $1" >&2; usage; exit 1 ;;
     esac
   done
-
-  [[ -n "$NAME" ]] || die "--name is required"
-  [[ "$NAME" =~ ^[a-zA-Z0-9._-]+$ ]] || die "Invalid --name '$NAME' (use only letters, digits, dot, underscore, hyphen)"
+  [[ -n "${NAME}" ]] || { echo "ERROR: --name is required" >&2; usage; exit 1; }
 }
 
-write_if_missing() {
-  local path="$1"
-  local owner="$2"
-  local group="$3"
-  local mode="$4"
-  local content="$5"
-
-  if [[ -e "$path" ]]; then
-    log "Debug" "Exists, not overwriting: $path"
-    return 0
-  fi
-
-  install -d -m 0755 -o "$owner" -g "$group" "$(dirname "$path")"
-  printf '%s' "$content" > "$path"
-  chown "$owner:$group" "$path"
-  chmod "$mode" "$path"
-  log "Info" "Created: $path"
+assert_toolchain() {
+  command -v node >/dev/null 2>&1 || { echo "ERROR: node not found" >&2; exit 1; }
+  command -v pnpm >/dev/null 2>&1 || { echo "ERROR: pnpm not found" >&2; exit 1; }
 }
 
 main() {
-  ensure_root "$@"
   parse_args "$@"
+  assert_toolchain
 
-  log "Info" "Starting ${ACTION_NAME} (user=${TARGET_USER}, name=${NAME}, base_dir=${BASE_DIR})"
+  local started_at finished_at user host rc status
+  started_at="$(date --iso-8601=seconds)"
+  user="$(id -un)"
+  host="$(hostname)"
+  rc=0
+  status="success"
 
-  install -d -m 0755 -o "$TARGET_USER" -g "$TARGET_USER" "$BASE_DIR"
+  mkdir -p "${PROJECTS_ROOT}"
+  local project_dir="${PROJECTS_ROOT}/${NAME}"
 
-  local project_dir="${BASE_DIR}/${NAME}"
-  local template_version="1.0.0"
-  local created_at
-  created_at="$(ts)"
+  log_line "Info" "Creating Node project: ${project_dir} FORCE=${FORCE}"
 
-  if [[ -e "$project_dir" ]] && [[ -n "$(ls -A "$project_dir" 2>/dev/null || true)" ]]; then
-    log "Warning" "Project directory exists and is not empty: $project_dir"
-    log "Warning" "Idempotent behavior: will only create missing files (no overwrites)."
+  mkdir -p "${project_dir}/src" "${project_dir}/scripts"
+
+  if [[ -d "${project_dir}" && "$(ls -A "${project_dir}" 2>/dev/null | wc -l)" -gt 0 && "${FORCE}" != "true" ]]; then
+    log_line "Error" "Project directory exists and is not empty: ${project_dir}. Re-run with --force to overwrite scaffold files."
+    rc=1
+    status="failed"
+    finished_at="$(date --iso-8601=seconds)"
+    write_state_kv "${status}" "${rc}" "${started_at}" "${finished_at}" "${user}" "${host}" "${LOG_PATH}" "${VERSION}" "${project_dir}"
+    exit "${rc}"
   fi
 
-  install -d -m 0755 -o "$TARGET_USER" -g "$TARGET_USER" \
-    "$project_dir" \
-    "$project_dir/src" \
-    "$project_dir/scripts"
-
-  write_if_missing "$project_dir/.gitignore" "$TARGET_USER" "$TARGET_USER" "0644" \
-"node_modules/
-dist/
-build/
-.env
-.DS_Store
-"
-
-  write_if_missing "$project_dir/package.json" "$TARGET_USER" "$TARGET_USER" "0644" \
-"{
-  \"name\": \"${NAME}\",
-  \"version\": \"0.1.0\",
-  \"private\": true,
-  \"type\": \"module\",
-  \"scripts\": {
-    \"dev\": \"node ./src/index.js\",
-    \"start\": \"node ./src/index.js\",
-    \"test\": \"echo \\\"No tests yet\\\" && exit 0\"
+  cat > "${project_dir}/package.json" <<EOF
+{
+  "name": "${NAME}",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "lint": "echo \\"(add eslint later if needed)\\"",
+    "test": "echo \\"(add tests later)\\""
   }
 }
-"
-
-  write_if_missing "$project_dir/src/index.js" "$TARGET_USER" "$TARGET_USER" "0644" \
-"console.log('Hello from ${NAME}!');"
-
-  write_if_missing "$project_dir/scripts/run.sh" "$TARGET_USER" "$TARGET_USER" "0755" \
-"#!/usr/bin/env bash
-set -euo pipefail
-
-usage() {
-  cat <<'EOF'
-scripts/run.sh
-
-Usage:
-  ./scripts/run.sh
 EOF
-}
 
-if [[ \"\${1:-}\" == \"-h\" || \"\${1:-}\" == \"--help\" ]]; then
-  usage
-  exit 0
+  cat > "${project_dir}/src/index.js" <<EOF
+console.log("Hello from ${NAME}!");
+console.log("Node:", process.version);
+EOF
+
+  cat > "${project_dir}/scripts/dev.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+if ! command -v pnpm >/dev/null 2>&1; then
+  echo "ERROR: pnpm not found" >&2
+  exit 1
 fi
 
-pnpm -s run start
-"
-
-  write_if_missing "$project_dir/scripts/dev.sh" "$TARGET_USER" "$TARGET_USER" "0755" \
-"#!/usr/bin/env bash
-set -euo pipefail
-
-usage() {
-  cat <<'EOF'
-scripts/dev.sh
-
-Usage:
-  ./scripts/dev.sh
-
-First time:
+if [[ ! -d node_modules ]]; then
+  echo "Installing deps..."
   pnpm install
-EOF
-}
-
-if [[ \"\${1:-}\" == \"-h\" || \"\${1:-}\" == \"--help\" ]]; then
-  usage
-  exit 0
 fi
 
-pnpm -s run dev
-"
+echo "Starting dev (node --watch)..."
+pnpm dev
+EOF
+  chmod +x "${project_dir}/scripts/dev.sh"
 
-  write_if_missing "$project_dir/scripts/test.sh" "$TARGET_USER" "$TARGET_USER" "0755" \
-"#!/usr/bin/env bash
+  cat > "${project_dir}/scripts/run.sh" <<'EOF'
+#!/usr/bin/env bash
 set -euo pipefail
+cd "$(dirname "$0")/.."
 
-usage() {
-  cat <<'EOF'
-scripts/test.sh
-
-Usage:
-  ./scripts/test.sh
-EOF
-}
-
-if [[ \"\${1:-}\" == \"-h\" || \"\${1:-}\" == \"--help\" ]]; then
-  usage
-  exit 0
+if ! command -v pnpm >/dev/null 2>&1; then
+  echo "ERROR: pnpm not found" >&2
+  exit 1
 fi
 
-pnpm -s run test
-"
+pnpm start
+EOF
+  chmod +x "${project_dir}/scripts/run.sh"
 
-  write_if_missing "$project_dir/project_config.yaml" "$TARGET_USER" "$TARGET_USER" "0644" \
-"project:
-  name: \"${NAME}\"
-  type: \"node\"
-  created_at: \"${created_at}\"
-  template_version: \"${template_version}\"
+  cat > "${project_dir}/README.md" <<EOF
+# ${NAME}
 
-node:
-  toolchain: \"node+pnpm\"
-  caches:
-    pnpm_store_dir: \"${TARGET_HOME}/dev/cache/pnpm-store\"
-    npm_cache_dir: \"${TARGET_HOME}/dev/cache/npm-cache\"
-"
+Minimal Node.js scaffold created by \`${ACTION}\`.
 
-  write_if_missing "$project_dir/README.md" "$TARGET_USER" "$TARGET_USER" "0644" \
-"# ${NAME}
+## Requirements
+- Node.js (LTS)
+- pnpm (via corepack) — recommended: \`setup-aryan install-node-toolchain-linux\`
 
-This project was generated by **setup-aryan** on Linux.
-
-## Quick Start (Linux)
-
+## Quick start
+Dev:
 \`\`\`bash
-pnpm install
-pnpm run dev
+./scripts/dev.sh
 \`\`\`
 
-## What got generated
-- \`project_config.yaml\`: toolchain + cache expectations
-- \`package.json\`: minimal scripts
-- \`src/index.js\`: runnable entrypoint
-- \`scripts/*.sh\`: helper runners
-
-## Notes on disk usage (pnpm)
-- pnpm uses a global store (hard-links where possible) to prevent \`node_modules\` duplication.
-- Your pnpm store is pinned by the toolchain installer under \`${TARGET_HOME}/dev/cache\`.
-"
-
-  cat > "$STATE_FILE" <<EOF
-installed=true
-project_dir=${project_dir}
-timestamp="$(ts)"
+Run:
+\`\`\`bash
+./scripts/run.sh
+\`\`\`
 EOF
-  chmod 0644 "$STATE_FILE"
-  log "Info" "Done: ${ACTION_NAME}"
-  log "Info" "Created/validated project at: ${project_dir}"
+
+  # Best-effort install to create lockfile
+  (cd "${project_dir}" && pnpm install >/dev/null 2>&1) || true
+
+  log_line "Info" "Created: ${project_dir}"
+  finished_at="$(date --iso-8601=seconds)"
+  write_state_kv "${status}" "${rc}" "${started_at}" "${finished_at}" "${user}" "${host}" "${LOG_PATH}" "${VERSION}" "${project_dir}"
 }
 
 main "$@"

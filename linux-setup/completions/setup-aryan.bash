@@ -1,26 +1,30 @@
-# Bash completion for setup-aryan
-# Install path (staged): /etc/bash_completion.d/setup-aryan
+# bash completion for setup-aryan
 
-_setup_aryan_complete() {
+_setup_aryan_actions() {
+  local actions_dir="/opt/aryan-setup/actions"
+  if [[ -d "${actions_dir}" ]]; then
+    ls -1 "${actions_dir}"/*.sh 2>/dev/null | xargs -r -n 1 basename | sed 's/\.sh$//' | sed '/^_/d'
+  fi
+}
+
+_setup_aryan() {
   local cur prev
+  COMPREPLY=()
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-  local actions_dir="/usr/local/aryan-setup/actions"
-
-  if [[ "${COMP_CWORD}" -eq 1 ]]; then
-    local actions
-    if [[ -d "${actions_dir}" ]]; then
-      actions="$(command ls -1 "${actions_dir}" 2>/dev/null | sed 's/\.sh$//' | sort)"
-    else
-      actions=""
-    fi
-    COMPREPLY=( $(compgen -W "list ${actions}" -- "${cur}") )
+  if [[ ${COMP_CWORD} -eq 1 ]]; then
+    COMPREPLY=( $(compgen -W "list run version --help -h $(_setup_aryan_actions)" -- "${cur}") )
     return 0
   fi
 
-  COMPREPLY=()
+  if [[ "${COMP_WORDS[1]}" == "run" && ${COMP_CWORD} -eq 2 ]]; then
+    COMPREPLY=( $(compgen -W "$(_setup_aryan_actions)" -- "${cur}") )
+    return 0
+  fi
+
+  # Default: no further suggestions
   return 0
 }
 
-complete -F _setup_aryan_complete setup-aryan
+complete -F _setup_aryan setup-aryan

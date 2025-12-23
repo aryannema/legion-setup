@@ -1,190 +1,160 @@
 #!/usr/bin/env bash
-set -euo pipefail
-
-# ==============================================================================
 # install-node-toolchain-linux.sh
 #
-# Installs:
-#   - nvm (user-owned)
-#   - Node LTS via nvm
-#   - pnpm via corepack (preferred) OR npm fallback
-#   - Pins pnpm store + npm cache under ~/dev/cache to avoid bloat
-#
 # Prerequisites:
-#   - Ubuntu 24.04.x
-#   - sudo access
-#   - curl
+# - Ubuntu 24.04+
+# - curl, git
 #
 # Usage:
-#   setup-aryan install-node-toolchain-linux
-#   OR:
-#     ./install-node-toolchain-linux.sh
+#   setup-aryan install-node-toolchain-linux [--force] [--help]
 #
-# Logging:
-#   - Logs to: /var/log/setup-aryan/install-node-toolchain-linux.log
-#   - State to: /var/log/setup-aryan/state-files/install-node-toolchain-linux.state
-# ==============================================================================
+# What it does (user-level):
+# - Installs/updates nvm in ~/.nvm
+# - Installs Node LTS via nvm
+# - Enables corepack + activates pnpm
+#
+# Logs:  /var/log/setup-aryan/install-node-toolchain-linux.log
+# State: /var/log/setup-aryan/state-files/install-node-toolchain-linux.state   (NO JSON)
 
-ACTION_NAME="install-node-toolchain-linux"
-LOG_DIR="/var/log/setup-aryan"
-STATE_DIR="/var/log/setup-aryan/state-files"
-LOG_FILE="${LOG_DIR}/${ACTION_NAME}.log"
-STATE_FILE="${STATE_DIR}/${ACTION_NAME}.state"
+set -euo pipefail
 
-ts() { TZ="Asia/Kolkata" date '+%Z %d-%m-%Y %H:%M:%S'; }
-log() {
-  local level="$1"; shift
-  local msg="$*"
-  mkdir -p "$LOG_DIR" "$STATE_DIR"
-  printf '%s %s %s\n' "$(ts)" "$level" "$msg" | tee -a "$LOG_FILE" >/dev/null
-}
-die() { log "Error" "$*"; exit 1; }
+ACTION="install-node-toolchain-linux"
+VERSION="1.1.0"
 
-ensure_root() {
-  if [[ "${EUID}" -ne 0 ]]; then
-    exec sudo -E bash "$0" "$@"
-  fi
-}
+LOG_ROOT="/var/log/setup-aryan"
+STATE_ROOT="/var/log/setup-aryan/state-files"
+LOG_PATH="${LOG_ROOT}/${ACTION}.log"
+STATE_PATH="${STATE_ROOT}/${ACTION}.state"
 
-TARGET_USER="${SUDO_USER:-$USER}"
-TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
-
-DEV_ROOT="${TARGET_HOME}/dev"
-CACHE_DIR="${DEV_ROOT}/cache"
-PNPM_STORE_DIR="${CACHE_DIR}/pnpm-store"
-NPM_CACHE_DIR="${CACHE_DIR}/npm-cache"
+FORCE="false"
 
 usage() {
-  cat <<EOF
-${ACTION_NAME}
+  cat <<'USAGE'
+install-node-toolchain-linux.sh
+
+Prerequisites:
+- Ubuntu 24.04+
+- curl, git
+- Internet access (downloads nvm)
 
 Usage:
-  ${ACTION_NAME}
-  ${ACTION_NAME} --help
+  setup-aryan install-node-toolchain-linux [--force]
+  setup-aryan install-node-toolchain-linux --help
 
-What it does:
-  - Installs nvm for ${TARGET_USER}
-  - Installs Node LTS
-  - Enables corepack and activates pnpm
-  - Pins pnpm store to: ${PNPM_STORE_DIR}
-  - Pins npm cache to: ${NPM_CACHE_DIR}
+Installs:
+- nvm (user-level)
+- Node.js LTS via nvm
+- pnpm via corepack
+USAGE
+}
+
+ist_stamp() { TZ="Asia/Kolkata" date '+IST %d-%m-%Y %H:%M:%S'; }
+
+log_line() {
+  local level="$1"; shift
+  local msg="$*"
+  sudo mkdir -p "${LOG_ROOT}" "${STATE_ROOT}" >/dev/null 2>&1 || true
+  printf '%s %s %s\n' "$(ist_stamp)" "${level}" "${msg}" | sudo tee -a "${LOG_PATH}" >/dev/null
+}
+
+read_state_kv() {
+  local path="$1"
+  [[ -f "$path" ]] || return 1
+  # shellcheck disable=SC1090
+  source <(sudo sed -n 's/^\([a-zA-Z0-9_]\+\)=\(.*\)$/\1="\2"/p' "$path")
+}
+
+write_state_kv() {
+  local status="$1" rc="$2" started_at="$3" finished_at="$4" user="$5" host="$6" log_path="$7" version="$8"
+  local tmp="/tmp/${ACTION}.state.$$"
+  cat > "${tmp}" <<EOF
+action=${ACTION}
+status=${status}
+rc=${rc}
+started_at=${started_at}
+finished_at=${finished_at}
+user=${user}
+host=${host}
+log_path=${log_path}
+version=${version}
 EOF
+  sudo mv -f "${tmp}" "${STATE_PATH}"
 }
 
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --force) FORCE="true"; shift ;;
       -h|--help) usage; exit 0 ;;
-      *) die "Unknown argument: $1 (use --help)" ;;
+      *) echo "ERROR: Unknown argument: $1" >&2; usage; exit 1 ;;
     esac
   done
 }
 
-require_cmd() {
-  local c="$1"
-  command -v "$c" >/dev/null 2>&1 || die "Missing prerequisite command: $c"
+ensure_prereq() {
+  command -v curl >/dev/null 2>&1 || { echo "ERROR: curl not found" >&2; exit 1; }
+  command -v git  >/dev/null 2>&1 || { echo "ERROR: git not found" >&2; exit 1; }
 }
 
-ensure_dirs() {
-  log "Info" "Ensuring cache dirs exist..."
-  install -d -m 0755 -o "$TARGET_USER" -g "$TARGET_USER" "$CACHE_DIR" "$PNPM_STORE_DIR" "$NPM_CACHE_DIR"
-}
-
-install_prereqs() {
-  log "Info" "Installing prerequisites (if needed)..."
-  apt-get update -y
-  apt-get install -y --no-install-recommends ca-certificates curl git
-}
-
-install_nvm() {
-  if [[ -s "${TARGET_HOME}/.nvm/nvm.sh" ]]; then
-    log "Info" "nvm already installed."
-    return 0
-  fi
-
-  log "Info" "Installing nvm for user ${TARGET_USER}..."
-  # Use bash -lc so it runs with a login shell environment
-  sudo -u "$TARGET_USER" bash -lc 'curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash' >/dev/null
-
-  [[ -s "${TARGET_HOME}/.nvm/nvm.sh" ]] || die "nvm install failed (missing ~/.nvm/nvm.sh)"
-  log "Info" "nvm installed."
-}
-
-install_node_lts() {
-  log "Info" "Installing Node LTS via nvm (idempotent)..."
-  sudo -u "$TARGET_USER" bash -lc '
-    set -euo pipefail
-    export NVM_DIR="$HOME/.nvm"
-    # shellcheck disable=SC1091
-    [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-    nvm install --lts
-    nvm alias default "lts/*"
-    node -v
-    npm -v
-  ' | tee -a "$LOG_FILE" >/dev/null
-}
-
-install_pnpm() {
-  log "Info" "Enabling corepack and activating pnpm..."
-  sudo -u "$TARGET_USER" bash -lc '
-    set -euo pipefail
-    export NVM_DIR="$HOME/.nvm"
-    # shellcheck disable=SC1091
-    [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-    corepack enable || true
-    corepack prepare pnpm@latest --activate || true
-    if ! command -v pnpm >/dev/null 2>&1; then
-      npm install -g pnpm
-    fi
-    pnpm -v
-  ' | tee -a "$LOG_FILE" >/dev/null
-}
-
-configure_stores() {
-  log "Info" "Configuring pnpm store + npm cache under ~/dev/cache..."
-  sudo -u "$TARGET_USER" bash -lc "
-    set -euo pipefail
-    export NVM_DIR=\"\$HOME/.nvm\"
-    # shellcheck disable=SC1091
-    [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\"
-    npm config set cache \"${NPM_CACHE_DIR}\"
-    pnpm config set store-dir \"${PNPM_STORE_DIR}\"
-  " | tee -a "$LOG_FILE" >/dev/null
-
-  log "Info" "pnpm store pinned to: ${PNPM_STORE_DIR}"
-  log "Info" "npm cache pinned to: ${NPM_CACHE_DIR}"
-}
-
-write_state() {
-  cat > "$STATE_FILE" <<EOF
-installed=true
-pnpm_store_dir=${PNPM_STORE_DIR}
-npm_cache_dir=${NPM_CACHE_DIR}
-timestamp="$(ts)"
-EOF
-  chmod 0644 "$STATE_FILE"
-  log "Debug" "State updated: $STATE_FILE"
+load_nvm() {
+  export NVM_DIR="${HOME}/.nvm"
+  # shellcheck disable=SC1090
+  [[ -s "${NVM_DIR}/nvm.sh" ]] && . "${NVM_DIR}/nvm.sh"
 }
 
 main() {
-  ensure_root "$@"
   parse_args "$@"
+  ensure_prereq
 
-  require_cmd apt-get
-  require_cmd curl
-  require_cmd sudo
+  local started_at finished_at user host rc status
+  started_at="$(date --iso-8601=seconds)"
+  finished_at=""
+  user="$(id -un)"
+  host="$(hostname)"
+  rc=0
+  status="success"
 
-  log "Info" "Starting ${ACTION_NAME} (target user: ${TARGET_USER})"
-  install_prereqs
-  ensure_dirs
-  install_nvm
-  install_node_lts
-  install_pnpm
-  configure_stores
-  write_state
-  log "Info" "Done: ${ACTION_NAME}"
-  log "Info" "Next (per-project): use pnpm in repos to avoid node_modules bloat."
+  log_line "Info" "Starting ${ACTION} (version=${VERSION}) FORCE=${FORCE}"
+
+  if [[ -f "${STATE_PATH}" && "${FORCE}" != "true" ]]; then
+    if read_state_kv "${STATE_PATH}" && [[ "${status:-}" == "success" ]]; then
+      log_line "Info" "Previous success recorded; skipping. Use --force to re-run."
+      finished_at="$(date --iso-8601=seconds)"
+      write_state_kv "skipped" 0 "${started_at}" "${finished_at}" "${user}" "${host}" "${LOG_PATH}" "${VERSION}"
+      exit 0
+    fi
+  fi
+
+  # Install nvm (idempotent)
+  if [[ ! -d "${HOME}/.nvm" ]]; then
+    log_line "Info" "Installing nvm (user-level) into ~/.nvm"
+    curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+  else
+    log_line "Info" "nvm already present at ~/.nvm"
+  fi
+
+  load_nvm
+  if ! command -v nvm >/dev/null 2>&1; then
+    log_line "Error" "nvm not available in this shell after install. Open a new terminal or source ~/.nvm/nvm.sh"
+    rc=1
+    status="failed"
+  else
+    log_line "Info" "Installing Node LTS via nvm"
+    nvm install --lts >/dev/null
+    nvm alias default 'lts/*' >/dev/null || true
+    nvm use default >/dev/null
+
+    log_line "Info" "Enabling corepack + preparing pnpm"
+    corepack enable >/dev/null 2>&1 || true
+    corepack prepare pnpm@latest --activate >/dev/null 2>&1 || true
+
+    log_line "Info" "Node: $(node -v 2>/dev/null || echo unknown)"
+    log_line "Info" "pnpm: $(pnpm -v 2>/dev/null || echo unknown)"
+  fi
+
+  finished_at="$(date --iso-8601=seconds)"
+  write_state_kv "${status}" "${rc}" "${started_at}" "${finished_at}" "${user}" "${host}" "${LOG_PATH}" "${VERSION}"
+  exit "${rc}"
 }
 
 main "$@"
-

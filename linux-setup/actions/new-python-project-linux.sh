@@ -1,410 +1,329 @@
 #!/usr/bin/env bash
-set -euo pipefail
-
-# ==============================================================================
 # new-python-project-linux.sh
 #
 # Prerequisites:
-#   - Ubuntu 24.04.x
-#   - setup-aryan base already staged (so logs/state dirs exist)
-#   - Python toolchain action already run (Miniconda + uv recommended)
+# - conda available (recommended: setup-aryan install-python-toolchain-linux)
+# - uv available (~/.local/bin/uv) (installed by python toolchain action)
 #
 # Usage:
-#   setup-aryan new-python-project-linux --name <project_name> [--dir <base_dir>] [--ai]
+#   setup-aryan new-python-project-linux --name myproj [--projects-root ~/dev/projects] [--dev-root ~/dev] [--ai] [--tensorflow] [--force]
+#   setup-aryan new-python-project-linux --help
 #
-# Examples:
-#   setup-aryan new-python-project-linux --name demo-ml --ai
-#   setup-aryan new-python-project-linux --name demo-py --dir /home/aryan/dev/projects
-#
-# Output:
-#   Creates a complete starter kit:
-#     - README.md + Quick Start
-#     - project_config.yaml
-#     - pyproject.toml
-#     - requirements.txt
-#     - src/main.py
-#     - scripts/run.sh, scripts/dev.sh, scripts/test.sh, scripts/lint.sh
-#     - .gitignore
-#
-# Logging:
-#   - Logs to: /var/log/setup-aryan/new-python-project-linux.log
-#   - State to: /var/log/setup-aryan/state-files/new-python-project-linux.state
-# ==============================================================================
+# Flags:
+# - --ai          adds common ML packages
+# - --tensorflow  adds tensorflow + creates validate_tf script
+# These can co-exist.
 
-ACTION_NAME="new-python-project-linux"
-LOG_DIR="/var/log/setup-aryan"
-STATE_DIR="/var/log/setup-aryan/state-files"
-LOG_FILE="${LOG_DIR}/${ACTION_NAME}.log"
-STATE_FILE="${STATE_DIR}/${ACTION_NAME}.state"
+set -euo pipefail
 
-ts() { TZ="Asia/Kolkata" date '+%Z %d-%m-%Y %H:%M:%S'; }
-log() {
-  local level="$1"; shift
-  local msg="$*"
-  mkdir -p "$LOG_DIR" "$STATE_DIR"
-  printf '%s %s %s\n' "$(ts)" "$level" "$msg" | tee -a "$LOG_FILE" >/dev/null
-}
-die() { log "Error" "$*"; exit 1; }
+ACTION="new-python-project-linux"
+VERSION="1.1.0"
 
-ensure_root() {
-  if [[ "${EUID}" -ne 0 ]]; then
-    exec sudo -E bash "$0" "$@"
-  fi
-}
-
-TARGET_USER="${SUDO_USER:-$USER}"
-TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
+LOG_ROOT="/var/log/setup-aryan"
+STATE_ROOT="/var/log/setup-aryan/state-files"
+LOG_PATH="${LOG_ROOT}/${ACTION}.log"
+STATE_PATH="${STATE_ROOT}/${ACTION}.state"
 
 NAME=""
-BASE_DIR="${TARGET_HOME}/dev/projects"
-AI_MODE="false"
+PROJECTS_ROOT="${HOME}/dev/projects"
+DEV_ROOT="${HOME}/dev"
+FORCE="false"
+FLAG_AI="false"
+FLAG_TF="false"
 
 usage() {
-  cat <<EOF
-${ACTION_NAME}
+  cat <<'USAGE'
+new-python-project-linux.sh
+
+Prerequisites:
+- conda available (recommended: setup-aryan install-python-toolchain-linux)
+- uv available (~/.local/bin/uv)
 
 Usage:
-  ${ACTION_NAME} --name <project_name> [--dir <base_dir>] [--ai]
-  ${ACTION_NAME} --help
+  setup-aryan new-python-project-linux --name <project> [--projects-root <dir>] [--dev-root <dir>] [--ai] [--tensorflow] [--force]
+  setup-aryan new-python-project-linux --help
 
-Flags:
-  --name <name>     Project name (folder name)
-  --dir  <path>     Base directory (default: ${BASE_DIR})
-  --ai              AI/ML mode (adds GPU/cache notes to README and config)
+Creates:
+- src/main.py
+- requirements.txt
+- project_config.yaml
+- .vscode/settings.json
+- scripts/dev.sh, scripts/run.sh
+- scripts/validate_tf.sh + src/validate_tf.py (if --tensorflow)
+USAGE
+}
+
+ist_stamp() { TZ="Asia/Kolkata" date '+IST %d-%m-%Y %H:%M:%S'; }
+
+log_line() {
+  local level="$1"; shift
+  local msg="$*"
+  sudo mkdir -p "${LOG_ROOT}" "${STATE_ROOT}" >/dev/null 2>&1 || true
+  printf '%s %s %s\n' "$(ist_stamp)" "${level}" "${msg}" | sudo tee -a "${LOG_PATH}" >/dev/null
+}
+
+write_state_kv() {
+  local status="$1" rc="$2" started_at="$3" finished_at="$4" user="$5" host="$6" log_path="$7" version="$8" project_dir="$9" env_dir="${10}"
+  local tmp="/tmp/${ACTION}.state.$$"
+  cat > "${tmp}" <<EOF
+action=${ACTION}
+status=${status}
+rc=${rc}
+started_at=${started_at}
+finished_at=${finished_at}
+user=${user}
+host=${host}
+log_path=${log_path}
+version=${version}
+project=${NAME}
+project_dir=${project_dir}
+env_dir=${env_dir}
+flag_ai_ml=${FLAG_AI}
+flag_tensorflow=${FLAG_TF}
 EOF
+  sudo mv -f "${tmp}" "${STATE_PATH}"
 }
 
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --name) NAME="${2:-}"; shift 2 ;;
-      --dir)  BASE_DIR="${2:-}"; shift 2 ;;
-      --ai)   AI_MODE="true"; shift ;;
+      --projects-root) PROJECTS_ROOT="${2:-}"; shift 2 ;;
+      --dev-root) DEV_ROOT="${2:-}"; shift 2 ;;
+      --ai) FLAG_AI="true"; shift ;;
+      --tensorflow) FLAG_TF="true"; shift ;;
+      --force) FORCE="true"; shift ;;
       -h|--help) usage; exit 0 ;;
-      *) die "Unknown argument: $1 (use --help)" ;;
+      *) echo "ERROR: Unknown argument: $1" >&2; usage; exit 1 ;;
     esac
   done
-
-  [[ -n "$NAME" ]] || die "--name is required"
-  [[ "$NAME" =~ ^[a-zA-Z0-9._-]+$ ]] || die "Invalid --name '$NAME' (use only letters, digits, dot, underscore, hyphen)"
+  [[ -n "${NAME}" ]] || { echo "ERROR: --name is required" >&2; usage; exit 1; }
 }
 
-ensure_user_dirs() {
-  install -d -m 0755 -o "$TARGET_USER" -g "$TARGET_USER" "$BASE_DIR"
-}
-
-write_if_missing() {
-  local path="$1"
-  local owner="$2"
-  local group="$3"
-  local mode="$4"
-  local content="$5"
-
-  if [[ -e "$path" ]]; then
-    log "Debug" "Exists, not overwriting: $path"
-    return 0
+assert_toolchain() {
+  command -v conda >/dev/null 2>&1 || { echo "ERROR: conda not found" >&2; exit 1; }
+  if [[ -x "${HOME}/.local/bin/uv" ]]; then
+    :
+  elif command -v uv >/dev/null 2>&1; then
+    :
+  else
+    echo "ERROR: uv not found (~/.local/bin/uv). Run: setup-aryan install-python-toolchain-linux" >&2
+    exit 1
   fi
-
-  install -d -m 0755 -o "$owner" -g "$group" "$(dirname "$path")"
-  printf '%s' "$content" > "$path"
-  chown "$owner:$group" "$path"
-  chmod "$mode" "$path"
-  log "Info" "Created: $path"
-}
-
-append_notice_if_missing() {
-  local path="$1"
-  local marker="$2"
-  local block="$3"
-  if [[ ! -f "$path" ]]; then
-    return 0
-  fi
-  if grep -Fq "$marker" "$path"; then
-    return 0
-  fi
-  printf '\n%s\n' "$block" >> "$path"
-  log "Info" "Appended block to: $path"
 }
 
 main() {
-  ensure_root "$@"
   parse_args "$@"
+  assert_toolchain
 
-  log "Info" "Starting ${ACTION_NAME} (user=${TARGET_USER}, name=${NAME}, base_dir=${BASE_DIR}, ai=${AI_MODE})"
+  local started_at finished_at user host rc status
+  started_at="$(date --iso-8601=seconds)"
+  user="$(id -un)"
+  host="$(hostname)"
+  rc=0
+  status="success"
 
-  ensure_user_dirs
+  mkdir -p "${PROJECTS_ROOT}" "${DEV_ROOT}/envs/conda"
+  local project_dir="${PROJECTS_ROOT}/${NAME}"
+  local env_dir="${DEV_ROOT}/envs/conda/${NAME}"
 
-  local project_dir="${BASE_DIR}/${NAME}"
-  local template_version="1.0.0"
-  local created_at
-  created_at="$(ts)"
+  log_line "Info" "Creating Python project: ${project_dir} env=${env_dir} AI=${FLAG_AI} TF=${FLAG_TF} FORCE=${FORCE}"
 
-  if [[ -e "$project_dir" ]] && [[ -n "$(ls -A "$project_dir" 2>/dev/null || true)" ]]; then
-    log "Warning" "Project directory exists and is not empty: $project_dir"
-    log "Warning" "Idempotent behavior: will only create missing files (no overwrites)."
+  mkdir -p "${project_dir}/src" "${project_dir}/scripts" "${project_dir}/.vscode"
+
+  if [[ -d "${project_dir}" && "$(ls -A "${project_dir}" 2>/dev/null | wc -l)" -gt 0 && "${FORCE}" != "true" ]]; then
+    log_line "Error" "Project directory exists and is not empty: ${project_dir}. Re-run with --force."
+    rc=1
+    status="failed"
+    finished_at="$(date --iso-8601=seconds)"
+    write_state_kv "${status}" "${rc}" "${started_at}" "${finished_at}" "${user}" "${host}" "${LOG_PATH}" "${VERSION}" "${project_dir}" "${env_dir}"
+    exit "${rc}"
   fi
 
-  install -d -m 0755 -o "$TARGET_USER" -g "$TARGET_USER" \
-    "$project_dir" \
-    "$project_dir/src" \
-    "$project_dir/scripts"
+  # requirements.txt
+  {
+    echo "pytest"
+    echo "ruff"
+    if [[ "${FLAG_AI}" == "true" ]]; then
+      echo "numpy"
+      echo "pandas"
+      echo "scikit-learn"
+      echo "matplotlib"
+    fi
+    if [[ "${FLAG_TF}" == "true" ]]; then
+      echo "tensorflow"
+    fi
+  } | awk '!seen[$0]++' > "${project_dir}/requirements.txt"
 
-  # .gitignore
-  write_if_missing "$project_dir/.gitignore" "$TARGET_USER" "$TARGET_USER" "0644" \
-".venv/
-__pycache__/
-*.pyc
-.pytest_cache/
-.coverage
-dist/
-build/
-*.egg-info/
-.env
-.DS_Store
-"
+  cat > "${project_dir}/project_config.yaml" <<EOF
+name: ${NAME}
+language: python
+paths:
+  project_root: ${project_dir}
+  conda_env_prefix: ${env_dir}
+flags:
+  ai_ml: ${FLAG_AI}
+  tensorflow: ${FLAG_TF}
+toolchain:
+  conda: true
+  uv: true
+EOF
 
-  # requirements.txt (empty starter)
-  write_if_missing "$project_dir/requirements.txt" "$TARGET_USER" "$TARGET_USER" "0644" \
-"# Add your Python deps here (pip-style), then run:
-#   uv pip install -r requirements.txt
-"
+  cat > "${project_dir}/.vscode/settings.json" <<EOF
+{
+  "python.defaultInterpreterPath": "${env_dir}/bin/python",
+  "python.terminal.activateEnvironment": true,
+  "python.analysis.typeCheckingMode": "basic",
+  "python.analysis.diagnosticSeverityOverrides": {
+    "reportMissingImports": "warning"
+  }
+}
+EOF
 
-  # pyproject.toml (minimal)
-  write_if_missing "$project_dir/pyproject.toml" "$TARGET_USER" "$TARGET_USER" "0644" \
-"[project]
-name = \"${NAME}\"
-version = \"0.1.0\"
-description = \"${NAME} (generated by setup-aryan)\"
-readme = \"README.md\"
-requires-python = \">=3.11\"
+  cat > "${project_dir}/src/main.py" <<EOF
+def main() -> None:
+    print("Hello from ${NAME}!")
 
-[tool.uv]
-# uv will create and manage a local .venv by default if you use 'uv venv'
-# Here we keep it simple and let conda own the interpreter, uv owns pip installs.
-"
-
-  # src/main.py (runnable)
-  write_if_missing "$project_dir/src/main.py" "$TARGET_USER" "$TARGET_USER" "0644" \
-"def main() -> None:
-    print(\"Hello from ${NAME}!\")
-    print(\"If this is an AI/ML project, activate your conda env and install deps via uv.\")
-
-if __name__ == \"__main__\":
+if __name__ == "__main__":
     main()
-"
-
-  # scripts helpers (idempotent, with help)
-  write_if_missing "$project_dir/scripts/run.sh" "$TARGET_USER" "$TARGET_USER" "0755" \
-"#!/usr/bin/env bash
-set -euo pipefail
-
-usage() {
-  cat <<'EOF'
-scripts/run.sh
-
-Usage:
-  ./scripts/run.sh
 EOF
-}
 
-if [[ \"\${1:-}\" == \"-h\" || \"\${1:-}\" == \"--help\" ]]; then
-  usage
-  exit 0
+  cat > "${project_dir}/scripts/dev.sh" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+cd "\$(dirname "\$0")/.."
+
+# conda must be available in PATH for this shell
+if ! command -v conda >/dev/null 2>&1; then
+  echo "ERROR: conda not found in PATH" >&2
+  exit 1
 fi
 
-python3 ./src/main.py
-"
-
-  write_if_missing "$project_dir/scripts/dev.sh" "$TARGET_USER" "$TARGET_USER" "0755" \
-"#!/usr/bin/env bash
-set -euo pipefail
-
-usage() {
-  cat <<'EOF'
-scripts/dev.sh
-
-Usage:
-  ./scripts/dev.sh
-
-Notes:
-  - For conda+uv workflow:
-      conda activate <env>
-      uv pip install -r requirements.txt
-EOF
-}
-
-if [[ \"\${1:-}\" == \"-h\" || \"\${1:-}\" == \"--help\" ]]; then
-  usage
-  exit 0
+ENV_DIR="${env_dir}"
+if [[ ! -d "\${ENV_DIR}" ]]; then
+  echo "Creating conda env at: \${ENV_DIR}"
+  conda create -y -p "\${ENV_DIR}" python=3.11
 fi
 
-./scripts/run.sh
-"
+# Activate by sourcing conda hook
+CONDA_BASE="\$(conda info --base)"
+# shellcheck disable=SC1090
+source "\${CONDA_BASE}/etc/profile.d/conda.sh"
+conda activate "\${ENV_DIR}"
 
-  write_if_missing "$project_dir/scripts/test.sh" "$TARGET_USER" "$TARGET_USER" "0755" \
-"#!/usr/bin/env bash
-set -euo pipefail
-
-usage() {
-  cat <<'EOF'
-scripts/test.sh
-
-Usage:
-  ./scripts/test.sh
-
-Default:
-  - No tests scaffolded yet.
-  - Add pytest to requirements.txt and create tests/ later.
-EOF
-}
-
-if [[ \"\${1:-}\" == \"-h\" || \"\${1:-}\" == \"--help\" ]]; then
-  usage
-  exit 0
+# Use uv to install deps
+if command -v uv >/dev/null 2>&1; then
+  uv pip install -r requirements.txt
+else
+  "\${HOME}/.local/bin/uv" pip install -r requirements.txt
 fi
 
-echo \"No tests configured yet.\"
-"
-
-  write_if_missing "$project_dir/scripts/lint.sh" "$TARGET_USER" "$TARGET_USER" "0755" \
-"#!/usr/bin/env bash
-set -euo pipefail
-
-usage() {
-  cat <<'EOF'
-scripts/lint.sh
-
-Usage:
-  ./scripts/lint.sh
-
-Tip:
-  - Add ruff/black to requirements.txt and run via uv:
-      uv pip install ruff black
-      ruff check .
-      black --check .
+echo ""
+echo "Ready."
+echo "Run: ./scripts/run.sh"
 EOF
-}
+  chmod +x "${project_dir}/scripts/dev.sh"
 
-if [[ \"\${1:-}\" == \"-h\" || \"\${1:-}\" == \"--help\" ]]; then
-  usage
-  exit 0
-fi
+  cat > "${project_dir}/scripts/run.sh" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+cd "\$(dirname "\$0")/.."
 
-echo \"No lint configured yet. See --help for suggestions.\"
-"
+CONDA_BASE="\$(conda info --base)"
+# shellcheck disable=SC1090
+source "\${CONDA_BASE}/etc/profile.d/conda.sh"
+conda activate "${env_dir}"
 
-  # project_config.yaml
-  local toolchain="conda+uv"
-  local caches_block=""
-  caches_block="python:
-  toolchain: \"${toolchain}\"
-  caches:
-    uv_cache_dir: \"${TARGET_HOME}/dev/cache/uv\"
-    conda_pkgs_dir: \"${TARGET_HOME}/dev/cache/conda-pkgs\"
-    conda_envs_dir: \"${TARGET_HOME}/dev/envs/conda\"
-"
+python src/main.py
+EOF
+  chmod +x "${project_dir}/scripts/run.sh"
 
-  local ai_block=""
-  if [[ "$AI_MODE" == "true" ]]; then
-    ai_block="ai_ml:
-  enabled: true
-  notes:
-    - \"Linux PRIME On-Demand: apps default to iGPU; use NVIDIA offload vars only when needed.\"
-    - \"Per-run NVIDIA offload (OpenGL): __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia <cmd>\"
-"
-  else
-    ai_block="ai_ml:
-  enabled: false
-"
+  if [[ "${FLAG_TF}" == "true" ]]; then
+    cat > "${project_dir}/src/validate_tf.py" <<'EOF'
+import os
+import time
+
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "1")
+
+import tensorflow as tf  # noqa: E402
+
+
+def main() -> None:
+    print("TensorFlow:", tf.__version__)
+    gpus = tf.config.list_physical_devices("GPU")
+    print("GPUs:", gpus)
+
+    # Prevent greedy VRAM allocation (best-effort)
+    for g in gpus:
+        try:
+            tf.config.experimental.set_memory_growth(g, True)
+        except Exception as e:
+            print("Could not set memory growth:", e)
+
+    a = tf.random.uniform((2048, 2048))
+    b = tf.random.uniform((2048, 2048))
+
+    t0 = time.time()
+    c = tf.linalg.matmul(a, b)
+    _ = c.numpy()
+    t1 = time.time()
+
+    print("Matmul OK. Seconds:", round(t1 - t0, 3))
+    print("First run can be slower due to CUDA/PTX/XLA warmup.")
+
+
+if __name__ == "__main__":
+    main()
+EOF
+
+    cat > "${project_dir}/scripts/validate_tf.sh" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+cd "\$(dirname "\$0")/.."
+
+CONDA_BASE="\$(conda info --base)"
+# shellcheck disable=SC1090
+source "\${CONDA_BASE}/etc/profile.d/conda.sh"
+conda activate "${env_dir}"
+
+python src/validate_tf.py
+EOF
+    chmod +x "${project_dir}/scripts/validate_tf.sh"
   fi
 
-  write_if_missing "$project_dir/project_config.yaml" "$TARGET_USER" "$TARGET_USER" "0644" \
-"project:
-  name: \"${NAME}\"
-  type: \"python\"
-  created_at: \"${created_at}\"
-  template_version: \"${template_version}\"
+  cat > "${project_dir}/README.md" <<EOF
+# ${NAME}
 
-${caches_block}
-${ai_block}
-"
+Scaffold created by \`${ACTION}\` (toolchain: conda + uv).
 
-  # README.md
-  local readme_base
-  readme_base="# ${NAME}
+## Flags
+- AI/ML: $( [[ "${FLAG_AI}" == "true" ]] && echo enabled || echo disabled )
+- TensorFlow: $( [[ "${FLAG_TF}" == "true" ]] && echo enabled || echo disabled )
 
-This project was generated by **setup-aryan** on Linux.
-
-## Quick Start (Linux)
-
-### 1) Create a conda environment (skeleton) and activate it
-Choose an env name, for example: \`${NAME}-py\`
-
+## Quick start
+Create env + install deps:
 \`\`\`bash
-# Create env (Python version example)
-conda create -n ${NAME}-py python=3.11 -y
-conda activate ${NAME}-py
+./scripts/dev.sh
 \`\`\`
 
-### 2) Install Python dependencies using uv (inside the active conda env)
-\`\`\`bash
-uv pip install -r requirements.txt
-\`\`\`
-
-### 3) Run
+Run:
 \`\`\`bash
 ./scripts/run.sh
 \`\`\`
 
-## What got generated
+## TensorFlow notes (only if enabled)
+- First GPU run can be slower due to CUDA/PTX/XLA compilation and cache warm-up.
+- If notebooks appear to hang or VRAM spikes, restart the kernel and run validation once.
 
-- \`project_config.yaml\`: records the chosen toolchain and expectations
-- \`requirements.txt\`: add dependencies here
-- \`src/main.py\`: minimal runnable entrypoint
-- \`scripts/*.sh\`: helper runners (run/dev/test/lint)
-
-## Notes on disk usage (conda + uv)
-
-- Keep your project under \`${TARGET_HOME}/dev/projects\` and caches under \`${TARGET_HOME}/dev/cache\`.
-- uv keeps a global cache and hard-links where possible, reducing duplication.
-- Conda pkgs/envs are redirected via your \`~/.condarc\` (from the toolchain installer action).
-"
-
-  write_if_missing "$project_dir/README.md" "$TARGET_USER" "$TARGET_USER" "0644" "$readme_base"
-
-  if [[ "$AI_MODE" == "true" ]]; then
-    append_notice_if_missing "$project_dir/README.md" "## AI/ML Notes (Linux GPU)" \
-"## AI/ML Notes (Linux GPU)
-
-On Ubuntu with PRIME **On-Demand**, GNOME/Wayland and normal GUI apps typically run on the **iGPU by default**.
-
-When you *explicitly* want NVIDIA offload for a specific run, use:
-
-- OpenGL (common):
-  \`\`\`bash
-  __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia <command>
-  \`\`\`
-
-- Vulkan (common):
-  \`\`\`bash
-  __NV_PRIME_RENDER_OFFLOAD=1 __VK_LAYER_NV_optimus=NVIDIA_only <command>
-  \`\`\`
-
-If you are keeping the dGPU mostly idle, prefer per-command offload instead of flipping system profiles.
-"
-  fi
-
-  # State
-  cat > "$STATE_FILE" <<EOF
-installed=true
-project_dir=${project_dir}
-ai_mode=${AI_MODE}
-timestamp="$(ts)"
+Validation:
+\`\`\`bash
+./scripts/validate_tf.sh
+\`\`\`
 EOF
-  chmod 0644 "$STATE_FILE"
-  log "Info" "Done: ${ACTION_NAME}"
-  log "Info" "Created/validated project at: ${project_dir}"
-  log "Info" "Next: cd \"${project_dir}\" && ./scripts/run.sh"
+
+  log_line "Info" "Created: ${project_dir}"
+  finished_at="$(date --iso-8601=seconds)"
+  write_state_kv "${status}" "${rc}" "${started_at}" "${finished_at}" "${user}" "${host}" "${LOG_PATH}" "${VERSION}" "${project_dir}" "${env_dir}"
 }
 
 main "$@"

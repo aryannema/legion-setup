@@ -1,249 +1,177 @@
 #!/usr/bin/env bash
-set -euo pipefail
-
-# ==============================================================================
 # new-java-project-linux.sh
 #
 # Prerequisites:
-#   - Ubuntu 24.04.x
-#   - Java installed (OpenJDK 21 recommended)
+# - java + javac available (recommended: setup-aryan install-java-linux)
 #
 # Usage:
-#   setup-aryan new-java-project-linux --name <project_name> [--dir <base_dir>]
-#
-# Output:
-#   - README.md + Quick Start
-#   - project_config.yaml
-#   - src/Main.java
-#   - scripts/run.sh, scripts/build.sh, scripts/clean.sh
-#   - .gitignore
-#
-# Build strategy:
-#   - Uses javac/java directly (no Maven/Gradle dependency)
-#
-# Logging:
-#   - Logs to: /var/log/setup-aryan/new-java-project-linux.log
-#   - State to: /var/log/setup-aryan/state-files/new-java-project-linux.state
-# ==============================================================================
+#   setup-aryan new-java-project-linux --name myjava [--projects-root ~/dev/projects] [--force] [--help]
 
-ACTION_NAME="new-java-project-linux"
-LOG_DIR="/var/log/setup-aryan"
-STATE_DIR="/var/log/setup-aryan/state-files"
-LOG_FILE="${LOG_DIR}/${ACTION_NAME}.log"
-STATE_FILE="${STATE_DIR}/${ACTION_NAME}.state"
+set -euo pipefail
 
-ts() { TZ="Asia/Kolkata" date '+%Z %d-%m-%Y %H:%M:%S'; }
-log() {
-  local level="$1"; shift
-  local msg="$*"
-  mkdir -p "$LOG_DIR" "$STATE_DIR"
-  printf '%s %s %s\n' "$(ts)" "$level" "$msg" | tee -a "$LOG_FILE" >/dev/null
-}
-die() { log "Error" "$*"; exit 1; }
+ACTION="new-java-project-linux"
+VERSION="1.1.0"
 
-ensure_root() {
-  if [[ "${EUID}" -ne 0 ]]; then
-    exec sudo -E bash "$0" "$@"
-  fi
-}
-
-TARGET_USER="${SUDO_USER:-$USER}"
-TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
+LOG_ROOT="/var/log/setup-aryan"
+STATE_ROOT="/var/log/setup-aryan/state-files"
+LOG_PATH="${LOG_ROOT}/${ACTION}.log"
+STATE_PATH="${STATE_ROOT}/${ACTION}.state"
 
 NAME=""
-BASE_DIR="${TARGET_HOME}/dev/projects"
+PROJECTS_ROOT="${HOME}/dev/projects"
+FORCE="false"
 
 usage() {
-  cat <<EOF
-${ACTION_NAME}
+  cat <<'USAGE'
+new-java-project-linux.sh
+
+Prerequisites:
+- java + javac available (recommended: setup-aryan install-java-linux)
 
 Usage:
-  ${ACTION_NAME} --name <project_name> [--dir <base_dir>]
-  ${ACTION_NAME} --help
+  setup-aryan new-java-project-linux --name <project> [--projects-root <dir>] [--force]
+  setup-aryan new-java-project-linux --help
+
+Creates:
+- src/Main.java
+- scripts/build.sh
+- scripts/run.sh
+- README.md
+USAGE
+}
+
+ist_stamp() { TZ="Asia/Kolkata" date '+IST %d-%m-%Y %H:%M:%S'; }
+
+log_line() {
+  local level="$1"; shift
+  local msg="$*"
+  sudo mkdir -p "${LOG_ROOT}" "${STATE_ROOT}" >/dev/null 2>&1 || true
+  printf '%s %s %s\n' "$(ist_stamp)" "${level}" "${msg}" | sudo tee -a "${LOG_PATH}" >/dev/null
+}
+
+write_state_kv() {
+  local status="$1" rc="$2" started_at="$3" finished_at="$4" user="$5" host="$6" log_path="$7" version="$8" project_dir="$9"
+  local tmp="/tmp/${ACTION}.state.$$"
+  cat > "${tmp}" <<EOF
+action=${ACTION}
+status=${status}
+rc=${rc}
+started_at=${started_at}
+finished_at=${finished_at}
+user=${user}
+host=${host}
+log_path=${log_path}
+version=${version}
+project=${NAME}
+project_dir=${project_dir}
 EOF
+  sudo mv -f "${tmp}" "${STATE_PATH}"
 }
 
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --name) NAME="${2:-}"; shift 2 ;;
-      --dir)  BASE_DIR="${2:-}"; shift 2 ;;
+      --projects-root) PROJECTS_ROOT="${2:-}"; shift 2 ;;
+      --force) FORCE="true"; shift ;;
       -h|--help) usage; exit 0 ;;
-      *) die "Unknown argument: $1 (use --help)" ;;
+      *) echo "ERROR: Unknown argument: $1" >&2; usage; exit 1 ;;
     esac
   done
-
-  [[ -n "$NAME" ]] || die "--name is required"
-  [[ "$NAME" =~ ^[a-zA-Z0-9._-]+$ ]] || die "Invalid --name '$NAME' (use only letters, digits, dot, underscore, hyphen)"
+  [[ -n "${NAME}" ]] || { echo "ERROR: --name is required" >&2; usage; exit 1; }
 }
 
-write_if_missing() {
-  local path="$1"
-  local owner="$2"
-  local group="$3"
-  local mode="$4"
-  local content="$5"
-
-  if [[ -e "$path" ]]; then
-    log "Debug" "Exists, not overwriting: $path"
-    return 0
-  fi
-
-  install -d -m 0755 -o "$owner" -g "$group" "$(dirname "$path")"
-  printf '%s' "$content" > "$path"
-  chown "$owner:$group" "$path"
-  chmod "$mode" "$path"
-  log "Info" "Created: $path"
+assert_toolchain() {
+  command -v java >/dev/null 2>&1 || { echo "ERROR: java not found" >&2; exit 1; }
+  command -v javac >/dev/null 2>&1 || { echo "ERROR: javac not found" >&2; exit 1; }
 }
 
 main() {
-  ensure_root "$@"
   parse_args "$@"
+  assert_toolchain
 
-  log "Info" "Starting ${ACTION_NAME} (user=${TARGET_USER}, name=${NAME}, base_dir=${BASE_DIR})"
+  local started_at finished_at user host rc status
+  started_at="$(date --iso-8601=seconds)"
+  user="$(id -un)"
+  host="$(hostname)"
+  rc=0
+  status="success"
 
-  install -d -m 0755 -o "$TARGET_USER" -g "$TARGET_USER" "$BASE_DIR"
+  mkdir -p "${PROJECTS_ROOT}"
+  local project_dir="${PROJECTS_ROOT}/${NAME}"
 
-  local project_dir="${BASE_DIR}/${NAME}"
-  local template_version="1.0.0"
-  local created_at
-  created_at="$(ts)"
+  log_line "Info" "Creating Java project: ${project_dir} FORCE=${FORCE}"
 
-  if [[ -e "$project_dir" ]] && [[ -n "$(ls -A "$project_dir" 2>/dev/null || true)" ]]; then
-    log "Warning" "Project directory exists and is not empty: $project_dir"
-    log "Warning" "Idempotent behavior: will only create missing files (no overwrites)."
+  mkdir -p "${project_dir}/src" "${project_dir}/scripts" "${project_dir}/out"
+
+  if [[ -d "${project_dir}" && "$(ls -A "${project_dir}" 2>/dev/null | wc -l)" -gt 0 && "${FORCE}" != "true" ]]; then
+    log_line "Error" "Project directory exists and is not empty: ${project_dir}. Re-run with --force."
+    rc=1
+    status="failed"
+    finished_at="$(date --iso-8601=seconds)"
+    write_state_kv "${status}" "${rc}" "${started_at}" "${finished_at}" "${user}" "${host}" "${LOG_PATH}" "${VERSION}" "${project_dir}"
+    exit "${rc}"
   fi
 
-  install -d -m 0755 -o "$TARGET_USER" -g "$TARGET_USER" \
-    "$project_dir" \
-    "$project_dir/src" \
-    "$project_dir/scripts" \
-    "$project_dir/build"
-
-  write_if_missing "$project_dir/.gitignore" "$TARGET_USER" "$TARGET_USER" "0644" \
-"build/
-*.class
-.DS_Store
-"
-
-  write_if_missing "$project_dir/src/Main.java" "$TARGET_USER" "$TARGET_USER" "0644" \
-"public class Main {
+  cat > "${project_dir}/src/Main.java" <<EOF
+public class Main {
     public static void main(String[] args) {
-        System.out.println(\"Hello from ${NAME}!\");
+        System.out.println("Hello from ${NAME}!");
+        System.out.println("Java: " + System.getProperty("java.version"));
     }
 }
-"
+EOF
 
-  write_if_missing "$project_dir/scripts/build.sh" "$TARGET_USER" "$TARGET_USER" "0755" \
-"#!/usr/bin/env bash
+  cat > "${project_dir}/scripts/build.sh" <<'EOF'
+#!/usr/bin/env bash
 set -euo pipefail
+cd "$(dirname "$0")/.."
 
-usage() {
-  cat <<'EOF'
-scripts/build.sh
+mkdir -p out
+echo "Compiling..."
+javac -d out src/Main.java
+echo "Build output -> out/"
+EOF
+  chmod +x "${project_dir}/scripts/build.sh"
 
-Usage:
+  cat > "${project_dir}/scripts/run.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+if [[ ! -f out/Main.class ]]; then
+  echo "No build found, running build..."
   ./scripts/build.sh
-EOF
-}
-
-if [[ \"\${1:-}\" == \"-h\" || \"\${1:-}\" == \"--help\" ]]; then
-  usage
-  exit 0
 fi
 
-mkdir -p build
-javac -d build src/Main.java
-echo \"Build complete: build/Main.class\"
-"
-
-  write_if_missing "$project_dir/scripts/run.sh" "$TARGET_USER" "$TARGET_USER" "0755" \
-"#!/usr/bin/env bash
-set -euo pipefail
-
-usage() {
-  cat <<'EOF'
-scripts/run.sh
-
-Usage:
-  ./scripts/run.sh
-
-Builds first, then runs.
+echo "Running..."
+java -cp out Main
 EOF
-}
+  chmod +x "${project_dir}/scripts/run.sh"
 
-if [[ \"\${1:-}\" == \"-h\" || \"\${1:-}\" == \"--help\" ]]; then
-  usage
-  exit 0
-fi
+  cat > "${project_dir}/README.md" <<EOF
+# ${NAME}
 
+Minimal Java scaffold created by \`${ACTION}\`.
+
+## Requirements
+- JDK on PATH (java/javac) — recommended: \`setup-aryan install-java-linux\`
+
+## Quick start
+Build:
+\`\`\`bash
 ./scripts/build.sh
-java -cp build Main
-"
+\`\`\`
 
-  write_if_missing "$project_dir/scripts/clean.sh" "$TARGET_USER" "$TARGET_USER" "0755" \
-"#!/usr/bin/env bash
-set -euo pipefail
-
-usage() {
-  cat <<'EOF'
-scripts/clean.sh
-
-Usage:
-  ./scripts/clean.sh
-EOF
-}
-
-if [[ \"\${1:-}\" == \"-h\" || \"\${1:-}\" == \"--help\" ]]; then
-  usage
-  exit 0
-fi
-
-rm -rf build
-echo \"Cleaned build/\"
-"
-
-  write_if_missing "$project_dir/project_config.yaml" "$TARGET_USER" "$TARGET_USER" "0644" \
-"project:
-  name: \"${NAME}\"
-  type: \"java\"
-  created_at: \"${created_at}\"
-  template_version: \"${template_version}\"
-
-java:
-  toolchain: \"openjdk\"
-  notes:
-    - \"This template uses javac/java directly (no Maven/Gradle).\"
-"
-
-  write_if_missing "$project_dir/README.md" "$TARGET_USER" "$TARGET_USER" "0644" \
-"# ${NAME}
-
-This project was generated by **setup-aryan** on Linux.
-
-## Quick Start (Linux)
-
+Run:
 \`\`\`bash
 ./scripts/run.sh
 \`\`\`
-
-## What got generated
-- \`project_config.yaml\`: toolchain expectations
-- \`src/Main.java\`: runnable entrypoint
-- \`scripts/build.sh\`, \`scripts/run.sh\`, \`scripts/clean.sh\`
-
-## Requirements
-- Java (JDK) installed and \`javac\` available on PATH
-"
-
-  cat > "$STATE_FILE" <<EOF
-installed=true
-project_dir=${project_dir}
-timestamp="$(ts)"
 EOF
-  chmod 0644 "$STATE_FILE"
-  log "Info" "Done: ${ACTION_NAME}"
-  log "Info" "Created/validated project at: ${project_dir}"
+
+  log_line "Info" "Created: ${project_dir}"
+  finished_at="$(date --iso-8601=seconds)"
+  write_state_kv "${status}" "${rc}" "${started_at}" "${finished_at}" "${user}" "${host}" "${LOG_PATH}" "${VERSION}" "${project_dir}"
 }
 
 main "$@"

@@ -1,77 +1,122 @@
 #!/usr/bin/env bash
-set -euo pipefail
-
-# ==============================================================================
 # setup-aryan-log
 #
-# Purpose:
-#   View logs for a staged action.
-#
 # Prerequisites:
-#   - setup-aryan staged on system
+# - Logs created under: /var/log/setup-aryan/
 #
 # Usage:
-#   setup-aryan-log list
-#   setup-aryan-log <action>
-#   setup-aryan-log <action> --follow
 #   setup-aryan-log --help
-# ==============================================================================
+#   setup-aryan-log list
+#   setup-aryan-log tail --name <file.log> [--lines 200]
+#   setup-aryan-log show --name <file.log>
+#   setup-aryan-log grep --name <file.log> --contains "Error"
 
-LOG_DIR="/var/log/setup-aryan"
+set -euo pipefail
 
-print_help() {
-  cat <<EOF
-setup-aryan-log
+LOG_ROOT="/var/log/setup-aryan"
+
+usage() {
+  cat <<'USAGE'
+setup-aryan-log (Linux)
 
 Usage:
+  setup-aryan-log --help
   setup-aryan-log list
-  setup-aryan-log <action>
-  setup-aryan-log <action> --follow
+  setup-aryan-log tail --name <file.log> [--lines 200]
+  setup-aryan-log show --name <file.log>
+  setup-aryan-log grep --name <file.log> --contains "Error"
 
-EOF
+Notes:
+- Reads logs from /var/log/setup-aryan/
+- Does not modify system state.
+USAGE
 }
 
-list_logs() {
-  if [[ ! -d "${LOG_DIR}" ]]; then
-    echo "No log directory: ${LOG_DIR}"
+ensure_logs() {
+  if [[ ! -d "${LOG_ROOT}" ]]; then
+    echo "No log directory found: ${LOG_ROOT}" >&2
     exit 0
   fi
-  find "${LOG_DIR}" -maxdepth 1 -type f -name "*.log" -printf "%f\n" | sort
 }
 
-show_log() {
-  local action="$1"
-  local follow="${2:-}"
-  local path="${LOG_DIR}/${action}.log"
+cmd_list() {
+  ensure_logs
+  echo "Logs in ${LOG_ROOT} (newest first):"
+  ls -1t "${LOG_ROOT}"/*.log 2>/dev/null | head -n 50 | xargs -r -n 1 basename || true
+}
 
+cmd_show() {
+  local name="$1"
+  ensure_logs
+  local path="${LOG_ROOT}/${name}"
   if [[ ! -f "${path}" ]]; then
-    echo "No log found: ${path}"
-    echo "Try: setup-aryan-log list"
+    echo "Log not found: ${path}" >&2
     exit 2
   fi
+  cat "${path}"
+}
 
-  if [[ "${follow}" == "--follow" || "${follow}" == "-f" ]]; then
-    tail -n 200 -f "${path}"
-  else
-    tail -n 200 "${path}"
+cmd_tail() {
+  local name="$1"
+  local lines="${2:-200}"
+  ensure_logs
+  local path="${LOG_ROOT}/${name}"
+  if [[ ! -f "${path}" ]]; then
+    echo "Log not found: ${path}" >&2
+    exit 2
   fi
+  tail -n "${lines}" "${path}"
+}
+
+cmd_grep() {
+  local name="$1"
+  local contains="$2"
+  ensure_logs
+  local path="${LOG_ROOT}/${name}"
+  if [[ ! -f "${path}" ]]; then
+    echo "Log not found: ${path}" >&2
+    exit 2
+  fi
+  grep -i --fixed-strings "${contains}" "${path}" || true
 }
 
 main() {
-  local cmd="${1:-}"
-  if [[ -z "${cmd}" || "${cmd}" == "-h" || "${cmd}" == "--help" ]]; then
-    print_help
-    exit 0
+  if [[ $# -lt 1 ]]; then
+    usage
+    exit 1
   fi
 
-  if [[ "${cmd}" == "list" ]]; then
-    list_logs
-    exit 0
-  fi
-
-  local action="${cmd}"
-  local follow="${2:-}"
-  show_log "${action}" "${follow}"
+  case "$1" in
+    -h|--help|help) usage; exit 0 ;;
+    list) cmd_list; exit 0 ;;
+    show)
+      shift
+      [[ "${1:-}" == "--name" ]] || { echo "ERROR: show requires --name <file.log>" >&2; exit 1; }
+      cmd_show "${2:-}"
+      ;;
+    tail)
+      shift
+      [[ "${1:-}" == "--name" ]] || { echo "ERROR: tail requires --name <file.log>" >&2; exit 1; }
+      local name="${2:-}"
+      shift 2
+      local lines=200
+      if [[ "${1:-}" == "--lines" ]]; then lines="${2:-200}"; fi
+      cmd_tail "${name}" "${lines}"
+      ;;
+    grep)
+      shift
+      [[ "${1:-}" == "--name" ]] || { echo "ERROR: grep requires --name <file.log>" >&2; exit 1; }
+      local name="${2:-}"
+      shift 2
+      [[ "${1:-}" == "--contains" ]] || { echo "ERROR: grep requires --contains <substring>" >&2; exit 1; }
+      cmd_grep "${name}" "${2:-}"
+      ;;
+    *)
+      echo "ERROR: Unknown command: $1" >&2
+      usage
+      exit 1
+      ;;
+  esac
 }
 
 main "$@"

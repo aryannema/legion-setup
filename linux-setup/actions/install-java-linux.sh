@@ -1,117 +1,117 @@
 #!/usr/bin/env bash
-set -euo pipefail
-
-# ==============================================================================
 # install-java-linux.sh
 #
-# Installs Java via apt (stable + idempotent on Ubuntu 24.04):
-#   - Default: OpenJDK 21 (recommended baseline)
-#   - Optional: OpenJDK 17 as well (--multi)
-#
 # Prerequisites:
-#   - Ubuntu 24.04.x
-#   - sudo access
+# - Ubuntu 24.04+
+# - sudo privileges
 #
 # Usage:
-#   setup-aryan install-java-linux
-#   ./install-java-linux.sh [--multi]
+#   setup-aryan install-java-linux [--force] [--help]
 #
-# Flags:
-#   --multi    Install both OpenJDK 21 and OpenJDK 17
-#
-# Logging:
-#   - Logs to: /var/log/setup-aryan/install-java-linux.log
-#   - State to: /var/log/setup-aryan/state-files/install-java-linux.state
-# ==============================================================================
+# Installs:
+# - OpenJDK 21 (via apt)
 
-ACTION_NAME="install-java-linux"
-LOG_DIR="/var/log/setup-aryan"
-STATE_DIR="/var/log/setup-aryan/state-files"
-LOG_FILE="${LOG_DIR}/${ACTION_NAME}.log"
-STATE_FILE="${STATE_DIR}/${ACTION_NAME}.state"
+set -euo pipefail
 
-ts() { TZ="Asia/Kolkata" date '+%Z %d-%m-%Y %H:%M:%S'; }
-log() {
-  local level="$1"; shift
-  local msg="$*"
-  mkdir -p "$LOG_DIR" "$STATE_DIR"
-  printf '%s %s %s\n' "$(ts)" "$level" "$msg" | tee -a "$LOG_FILE" >/dev/null
-}
-die() { log "Error" "$*"; exit 1; }
+ACTION="install-java-linux"
+VERSION="1.1.0"
 
-ensure_root() {
-  if [[ "${EUID}" -ne 0 ]]; then
-    exec sudo -E bash "$0" "$@"
-  fi
-}
+LOG_ROOT="/var/log/setup-aryan"
+STATE_ROOT="/var/log/setup-aryan/state-files"
+LOG_PATH="${LOG_ROOT}/${ACTION}.log"
+STATE_PATH="${STATE_ROOT}/${ACTION}.state"
 
-MULTI="false"
+FORCE="false"
 
 usage() {
-  cat <<EOF
-${ACTION_NAME}
+  cat <<'USAGE'
+install-java-linux.sh
+
+Prerequisites:
+- Ubuntu 24.04+
+- sudo privileges
 
 Usage:
-  ${ACTION_NAME} [--multi]
-  ${ACTION_NAME} --help
+  setup-aryan install-java-linux [--force]
+  setup-aryan install-java-linux --help
 
-Default:
-  - Installs OpenJDK 21 (openjdk-21-jdk)
+Installs:
+- OpenJDK 21 (apt)
+USAGE
+}
 
---multi:
-  - Installs OpenJDK 21 + OpenJDK 17
-  - Switch using: sudo update-alternatives --config java
+ist_stamp() { TZ="Asia/Kolkata" date '+IST %d-%m-%Y %H:%M:%S'; }
+
+log_line() {
+  local level="$1"; shift
+  local msg="$*"
+  sudo mkdir -p "${LOG_ROOT}" "${STATE_ROOT}" >/dev/null 2>&1 || true
+  printf '%s %s %s\n' "$(ist_stamp)" "${level}" "${msg}" | sudo tee -a "${LOG_PATH}" >/dev/null
+}
+
+read_state_kv() {
+  local path="$1"
+  [[ -f "$path" ]] || return 1
+  # shellcheck disable=SC1090
+  source <(sudo sed -n 's/^\([a-zA-Z0-9_]\+\)=\(.*\)$/\1="\2"/p' "$path")
+}
+
+write_state_kv() {
+  local status="$1" rc="$2" started_at="$3" finished_at="$4" user="$5" host="$6" log_path="$7" version="$8"
+  local tmp="/tmp/${ACTION}.state.$$"
+  cat > "${tmp}" <<EOF
+action=${ACTION}
+status=${status}
+rc=${rc}
+started_at=${started_at}
+finished_at=${finished_at}
+user=${user}
+host=${host}
+log_path=${log_path}
+version=${version}
 EOF
+  sudo mv -f "${tmp}" "${STATE_PATH}"
 }
 
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --multi) MULTI="true"; shift ;;
+      --force) FORCE="true"; shift ;;
       -h|--help) usage; exit 0 ;;
-      *) die "Unknown argument: $1 (use --help)" ;;
+      *) echo "ERROR: Unknown argument: $1" >&2; usage; exit 1 ;;
     esac
   done
 }
 
-install_java() {
-  log "Info" "Updating apt index..."
-  apt-get update -y
-
-  log "Info" "Installing OpenJDK 21..."
-  apt-get install -y openjdk-21-jdk
-
-  if [[ "$MULTI" == "true" ]]; then
-    log "Info" "Installing OpenJDK 17 (multi mode)..."
-    apt-get install -y openjdk-17-jdk
-  fi
-
-  log "Info" "Java versions available:"
-  java -version 2>&1 | tee -a "$LOG_FILE" >/dev/null || true
-}
-
-write_state() {
-  cat > "$STATE_FILE" <<EOF
-installed=true
-multi=${MULTI}
-timestamp="$(ts)"
-EOF
-  chmod 0644 "$STATE_FILE"
-  log "Debug" "State updated: $STATE_FILE"
-}
-
 main() {
-  ensure_root "$@"
   parse_args "$@"
+  local started_at finished_at user host rc status
+  started_at="$(date --iso-8601=seconds)"
+  user="$(id -un)"
+  host="$(hostname)"
+  rc=0
+  status="success"
 
-  log "Info" "Starting ${ACTION_NAME}"
-  install_java
-  write_state
-  log "Info" "Done: ${ACTION_NAME}"
-  if [[ "$MULTI" == "true" ]]; then
-    log "Info" "To switch Java: sudo update-alternatives --config java"
+  log_line "Info" "Starting ${ACTION} (version=${VERSION}) FORCE=${FORCE}"
+
+  if [[ -f "${STATE_PATH}" && "${FORCE}" != "true" ]]; then
+    if read_state_kv "${STATE_PATH}" && [[ "${status:-}" == "success" ]]; then
+      log_line "Info" "Previous success recorded; skipping. Use --force to re-run."
+      finished_at="$(date --iso-8601=seconds)"
+      write_state_kv "skipped" 0 "${started_at}" "${finished_at}" "${user}" "${host}" "${LOG_PATH}" "${VERSION}"
+      exit 0
+    fi
   fi
+
+  log_line "Info" "Updating apt + installing OpenJDK 21"
+  sudo apt-get update -y
+  sudo apt-get install -y openjdk-21-jdk
+
+  log_line "Info" "java: $(java -version 2>&1 | head -n 1 || true)"
+  log_line "Info" "javac: $(javac -version 2>&1 || true)"
+
+  finished_at="$(date --iso-8601=seconds)"
+  write_state_kv "${status}" "${rc}" "${started_at}" "${finished_at}" "${user}" "${host}" "${LOG_PATH}" "${VERSION}"
 }
 
 main "$@"
-

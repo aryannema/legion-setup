@@ -1,129 +1,120 @@
 #!/usr/bin/env bash
-set -euo pipefail
-
-# ==============================================================================
 # validate-linux-gpu.sh
 #
-# Purpose:
-#   Validate iGPU-first behavior + Chrome wrapper setup on Ubuntu hybrid graphics.
-#
 # Prerequisites:
-#   - prime-select (optional)
-#   - nvidia-smi (optional)
-#   - google-chrome-stable (optional)
+# - NVIDIA driver installed (nvidia-smi present)
 #
 # Usage:
-#   setup-aryan validate-linux-gpu
-#   setup-aryan validate-linux-gpu -- --user aryan
-# ==============================================================================
+#   setup-aryan validate-linux-gpu [--force] [--help]
+#
+# What it does:
+# - Prints nvidia-smi summary
+# - Explains why Xorg may appear in nvidia-smi (often normal if PRIME render offload / dGPU present)
+# - Records state
 
-TZ_NAME="Asia/Kolkata"
-ACTION_NAME="validate-linux-gpu"
-TARGET_USER="${SUDO_USER:-aryan}"
+set -euo pipefail
 
-ts() { TZ="${TZ_NAME}" date "+%Z %d-%m-%Y %H:%M:%S"; }
-log() { echo "$(ts) INFO ${ACTION_NAME}: $*"; }
-warn() { echo "$(ts) WARNING ${ACTION_NAME}: $*" >&2; }
+ACTION="validate-linux-gpu"
+VERSION="1.1.0"
 
-print_help() {
-  cat <<EOF
-${ACTION_NAME}
+LOG_ROOT="/var/log/setup-aryan"
+STATE_ROOT="/var/log/setup-aryan/state-files"
+LOG_PATH="${LOG_ROOT}/${ACTION}.log"
+STATE_PATH="${STATE_ROOT}/${ACTION}.state"
+
+FORCE="false"
+
+usage() {
+  cat <<'USAGE'
+validate-linux-gpu.sh
+
+Prerequisites:
+- NVIDIA driver installed (nvidia-smi)
 
 Usage:
-  ${ACTION_NAME}.sh [--user <username>]
-
-Checks:
-  - Session type (Wayland/X11)
-  - prime-select query (if available)
-  - nvidia-smi process list (if available)
-  - Chrome iGPU wrapper and desktop entry under user's home
-
-EOF
+  setup-aryan validate-linux-gpu [--force]
+  setup-aryan validate-linux-gpu --help
+USAGE
 }
 
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --user)
-      TARGET_USER="${2:-}"
-      shift 2
-      ;;
-    -h|--help)
-      print_help
+ist_stamp() { TZ="Asia/Kolkata" date '+IST %d-%m-%Y %H:%M:%S'; }
+log_line() {
+  local level="$1"; shift
+  local msg="$*"
+  sudo mkdir -p "${LOG_ROOT}" "${STATE_ROOT}" >/dev/null 2>&1 || true
+  printf '%s %s %s\n' "$(ist_stamp)" "${level}" "${msg}" | sudo tee -a "${LOG_PATH}" >/dev/null
+}
+read_state_kv() {
+  local path="$1"
+  [[ -f "$path" ]] || return 1
+  # shellcheck disable=SC1090
+  source <(sudo sed -n 's/^\([a-zA-Z0-9_]\+\)=\(.*\)$/\1="\2"/p' "$path")
+}
+write_state_kv() {
+  local status="$1" rc="$2" started_at="$3" finished_at="$4" user="$5" host="$6" log_path="$7" version="$8"
+  local tmp="/tmp/${ACTION}.state.$$"
+  cat > "${tmp}" <<EOF
+action=${ACTION}
+status=${status}
+rc=${rc}
+started_at=${started_at}
+finished_at=${finished_at}
+user=${user}
+host=${host}
+log_path=${log_path}
+version=${version}
+EOF
+  sudo mv -f "${tmp}" "${STATE_PATH}"
+}
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force) FORCE="true"; shift ;;
+      -h|--help) usage; exit 0 ;;
+      *) echo "ERROR: Unknown argument: $1" >&2; usage; exit 1 ;;
+    esac
+  done
+}
+
+main() {
+  parse_args "$@"
+
+  local started_at finished_at user host rc status
+  started_at="$(date --iso-8601=seconds)"
+  user="$(id -un)"
+  host="$(hostname)"
+  rc=0
+  status="success"
+
+  log_line "Info" "Starting ${ACTION} (version=${VERSION}) FORCE=${FORCE}"
+
+  if [[ -f "${STATE_PATH}" && "${FORCE}" != "true" ]]; then
+    if read_state_kv "${STATE_PATH}" && [[ "${status:-}" == "success" ]]; then
+      log_line "Info" "Previous success recorded; skipping. Use --force to re-run."
+      finished_at="$(date --iso-8601=seconds)"
+      write_state_kv "skipped" 0 "${started_at}" "${finished_at}" "${user}" "${host}" "${LOG_PATH}" "${VERSION}"
       exit 0
-      ;;
-    *)
-      warn "Unknown arg: $1"
-      shift
-      ;;
-  esac
-done
+    fi
+  fi
 
-TARGET_HOME="$(getent passwd "${TARGET_USER}" | cut -d: -f6 || true)"
-if [[ -z "${TARGET_HOME}" ]]; then
-  TARGET_HOME="/home/${TARGET_USER}"
-fi
+  if ! command -v nvidia-smi >/dev/null 2>&1; then
+    log_line "Error" "nvidia-smi not found. NVIDIA driver not installed or not loaded."
+    rc=1
+    status="failed"
+  else
+    log_line "Info" "nvidia-smi output:"
+    nvidia-smi | sudo tee -a "${LOG_PATH}" >/dev/null
 
-need_cmd() { command -v "$1" >/dev/null 2>&1; }
+    log_line "Info" "Why Xorg can show up in nvidia-smi (often normal):"
+    log_line "Info" "- On laptops with NVIDIA dGPU present, the driver may keep a minimal context."
+    log_line "Info" "- PRIME render offload / on-demand setups can still show Xorg using a few MiB."
+    log_line "Info" "- The goal is iGPU-first for desktop; dGPU should not be primary renderer unless explicitly selected."
+  fi
 
-log "Target user: ${TARGET_USER} (home: ${TARGET_HOME})"
+  finished_at="$(date --iso-8601=seconds)"
+  write_state_kv "${status}" "${rc}" "${started_at}" "${finished_at}" "${user}" "${host}" "${LOG_PATH}" "${VERSION}"
+  exit "${rc}"
+}
 
-log "Session:"
-log "  XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-unknown}"
-log "  WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-}"
-log "  DISPLAY=${DISPLAY:-}"
-
-if need_cmd prime-select; then
-  log "PRIME mode:"
-  sudo prime-select query || true
-else
-  warn "prime-select not found"
-fi
-
-if need_cmd nvidia-smi; then
-  log "nvidia-smi summary:"
-  nvidia-smi || true
-  log "nvidia-smi processes (if any):"
-  nvidia-smi pmon -c 1 2>/dev/null || true
-  log "Tip: If you see gnome-shell, chrome, vscode in nvidia-smi process list while on-demand, something is off."
-else
-  warn "nvidia-smi not found (driver not installed or not working)"
-fi
-
-# Chrome wrapper checks
-wrapper="${TARGET_HOME}/.local/bin/chrome-igpu"
-desktop="${TARGET_HOME}/.local/share/applications/google-chrome-igpu.desktop"
-cache_dir="${TARGET_HOME}/local_chrome_storage/cache"
-profile_dir="${TARGET_HOME}/profiles/chrome"
-
-log "Chrome wrapper checks:"
-if [[ -f "${wrapper}" ]]; then
-  log "  OK: wrapper exists: ${wrapper}"
-  log "  wrapper head:"
-  head -n 20 "${wrapper}" | sed 's/^/    /'
-else
-  warn "  MISSING: wrapper not found: ${wrapper}"
-fi
-
-if [[ -f "${desktop}" ]]; then
-  log "  OK: desktop entry exists: ${desktop}"
-  log "  Exec line:"
-  grep -E '^Exec=' "${desktop}" | sed 's/^/    /' || true
-  log "  Name line:"
-  grep -E '^Name=' "${desktop}" | sed 's/^/    /' || true
-else
-  warn "  MISSING: desktop entry not found: ${desktop}"
-fi
-
-if [[ -d "${cache_dir}" ]]; then
-  log "  OK: cache dir exists: ${cache_dir}"
-else
-  warn "  MISSING: cache dir not found: ${cache_dir}"
-fi
-
-if [[ -d "${profile_dir}" ]]; then
-  log "  OK: profile dir exists: ${profile_dir}"
-else
-  warn "  MISSING: profile dir not found: ${profile_dir}"
-fi
-
-log "Done."
+main "$@"

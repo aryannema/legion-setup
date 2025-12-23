@@ -1,114 +1,179 @@
 #!/usr/bin/env bash
-set -euo pipefail
-
-# ==============================================================================
 # setup-aryan
 #
-# Purpose:
-#   Wrapper runner for staged Linux actions.
-#
 # Prerequisites:
-#   - Staged via: linux-setup/stage-aryan-setup.sh
-#   - bash
+# - Staged via: sudo ./linux-setup/stage-aryan-setup.sh
 #
 # Usage:
-#   setup-aryan list
-#   setup-aryan <action> [-- <action-args...>]
 #   setup-aryan --help
+#   setup-aryan list
+#   setup-aryan run <action> [--force] [-- <action args...>]
+#   setup-aryan <action> [--force] [-- <action args...>]
+#   setup-aryan version
 #
-# Logging:
-#   - Writes to /var/log/setup-aryan/<action>.log
-#   - Format: "<TZ dd-mm-yyyy HH:MM:ss> <LEVEL> <message>"
-# ==============================================================================
+# Notes:
+# - Logs:  /var/log/setup-aryan/
+# - State: /var/log/setup-aryan/state-files/   (NO JSON, key=value .state)
 
-TZ_NAME="Asia/Kolkata"
-ROOT="/usr/local/aryan-setup"
-ACTIONS_DIR="${ROOT}/actions"
-LOG_DIR="/var/log/setup-aryan"
-STATE_DIR="${LOG_DIR}/state-files"
+set -euo pipefail
 
-ts() { TZ="${TZ_NAME}" date "+%Z %d-%m-%Y %H:%M:%S"; }
-log_line() { local lvl="$1"; shift; echo "$(ts) ${lvl} $*"; }
+LOG_ROOT="/var/log/setup-aryan"
+STATE_ROOT="/var/log/setup-aryan/state-files"
+WRAPPER_LOG="${LOG_ROOT}/setup-aryan.log"
+VERSION="1.1.0"
 
-print_help() {
-  cat <<EOF
-setup-aryan
+BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${BIN_DIR}/.." && pwd)"
+ACTIONS_DIR="${ROOT_DIR}/actions"
+
+usage() {
+  cat <<USAGE
+setup-aryan (Linux)
 
 Usage:
-  setup-aryan list
-  setup-aryan <action> [-- <args...>]
   setup-aryan --help
+  setup-aryan list
+  setup-aryan run <action> [--force] [-- <action args...>]
+  setup-aryan <action> [--force] [-- <action args...>]
+  setup-aryan version
 
-Notes:
-  - Actions are discovered from: ${ACTIONS_DIR}
-  - Logs are written to: ${LOG_DIR}/<action>.log
+Paths:
+  Actions: ${ACTIONS_DIR}
+  Logs:    ${LOG_ROOT}
+  State:   ${STATE_ROOT}  (key=value .state; NO JSON)
 
-EOF
+Examples:
+  setup-aryan list
+  setup-aryan run install-python-toolchain-linux --force
+  setup-aryan new-python-project-linux -- --name myproj --ai --tensorflow
+USAGE
 }
 
-ensure_dirs() {
-  sudo -n true 2>/dev/null || true
-  if [[ ! -d "${LOG_DIR}" ]]; then
-    sudo mkdir -p "${LOG_DIR}" || true
+ist_stamp() { TZ="Asia/Kolkata" date '+IST %d-%m-%Y %H:%M:%S'; }
+
+log_line() {
+  local level="$1"; shift
+  local msg="$*"
+  mkdir -p "${LOG_ROOT}" >/dev/null 2>&1 || true
+  printf '%s %s %s\n' "$(ist_stamp)" "${level}" "${msg}" | tee -a "${WRAPPER_LOG}" >/dev/null
+}
+
+ensure_env() {
+  if [[ ! -d "${ACTIONS_DIR}" ]]; then
+    echo "ERROR: Actions directory not found: ${ACTIONS_DIR}" >&2
+    echo "Did you run: sudo ./linux-setup/stage-aryan-setup.sh ?" >&2
+    exit 1
   fi
-  if [[ ! -d "${STATE_DIR}" ]]; then
-    sudo mkdir -p "${STATE_DIR}" || true
+  if [[ ! -d "${LOG_ROOT}" ]]; then
+    # wrapper should not force sudo; best effort only
+    mkdir -p "${LOG_ROOT}" 2>/dev/null || true
+  fi
+  if [[ ! -d "${STATE_ROOT}" ]]; then
+    mkdir -p "${STATE_ROOT}" 2>/dev/null || true
   fi
 }
 
 list_actions() {
-  if [[ ! -d "${ACTIONS_DIR}" ]]; then
-    echo "No actions directory found: ${ACTIONS_DIR}"
-    exit 1
-  fi
-  find "${ACTIONS_DIR}" -maxdepth 1 -type f -name "*.sh" -printf "%f\n" \
-    | sed 's/\.sh$//' \
-    | sort
+  ensure_env
+  echo "Actions (from ${ACTIONS_DIR}):"
+  local f
+  shopt -s nullglob
+  for f in "${ACTIONS_DIR}"/*.sh; do
+    local base
+    base="$(basename "$f")"
+    base="${base%.sh}"
+    [[ "${base}" == _* ]] && continue
+    echo "  - ${base}"
+  done
 }
 
-run_action() {
-  local action="$1"; shift || true
-  local action_path="${ACTIONS_DIR}/${action}.sh"
-  local log_path="${LOG_DIR}/${action}.log"
+show_version() {
+  echo "${VERSION}"
+}
 
-  if [[ ! -f "${action_path}" ]]; then
-    echo "Unknown action: ${action}"
-    echo "Try: setup-aryan list"
+resolve_action() {
+  local name="$1"
+  local path="${ACTIONS_DIR}/${name}.sh"
+  [[ -f "${path}" ]] && echo "${path}" || echo ""
+}
+
+invoke_action() {
+  local action="$1"; shift
+  local force="$1"; shift
+
+  ensure_env
+
+  local path
+  path="$(resolve_action "${action}")"
+  if [[ -z "${path}" ]]; then
+    log_line "Error" "Unknown action: ${action}"
+    echo "Try: setup-aryan list" >&2
     exit 2
   fi
 
-  ensure_dirs
+  local args=()
+  if [[ "${force}" == "true" ]]; then
+    args+=(--force)
+  fi
+  args+=("$@")
 
-  {
-    log_line "INFO" "setup-aryan: action=${action} user=$(id -un) uid=$(id -u) pwd=$(pwd)"
-    log_line "INFO" "setup-aryan: action_path=${action_path}"
-    log_line "INFO" "setup-aryan: log_path=${log_path}"
-    echo
-    bash "${action_path}" "$@"
-    echo
-    log_line "INFO" "setup-aryan: action=${action} finished rc=$?"
-  } 2>&1 | tee -a "${log_path}"
+  log_line "Info" "Running action: ${action} ${args[*]:-}"
+  # shellcheck disable=SC2068
+  "${path}" ${args[@]}
 }
 
 main() {
-  local cmd="${1:-}"
-  if [[ -z "${cmd}" || "${cmd}" == "-h" || "${cmd}" == "--help" ]]; then
-    print_help
-    exit 0
+  if [[ $# -lt 1 ]]; then
+    usage
+    exit 1
   fi
 
-  if [[ "${cmd}" == "list" ]]; then
-    list_actions
-    exit 0
-  fi
+  local cmd="$1"; shift || true
+  case "${cmd}" in
+    -h|--help|help) usage; exit 0 ;;
+    version) show_version; exit 0 ;;
+    list) list_actions; exit 0 ;;
+    run)
+      if [[ $# -lt 1 ]]; then
+        echo "ERROR: Missing action name." >&2
+        usage
+        exit 1
+      fi
+      local action="$1"; shift
+      local force="false"
+      local forwarded=()
 
-  shift || true
-  # Allow a literal "--" separator
-  if [[ "${1:-}" == "--" ]]; then
-    shift || true
-  fi
+      # Collect args; support -- separator
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --force) force="true"; shift ;;
+          --) shift; forwarded+=("$@"); break ;;
+          *) forwarded+=("$1"); shift ;;
+        esac
+      done
 
-  run_action "${cmd}" "$@"
+      invoke_action "${action}" "${force}" "${forwarded[@]}"
+      exit 0
+      ;;
+    *)
+      # Treat cmd as action name
+      local action="${cmd}"
+      local force="false"
+      local forwarded=()
+
+      # cmd can be followed by args; support --force and --
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --force) force="true"; shift ;;
+          --) shift; forwarded+=("$@"); break ;;
+          *) forwarded+=("$1"); shift ;;
+        esac
+      done
+
+      invoke_action "${action}" "${force}" "${forwarded[@]}"
+      exit 0
+      ;;
+  esac
 }
 
 main "$@"

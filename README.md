@@ -284,7 +284,7 @@ Create these folders:
 
 ### 5.1 Cap WSL2 RAM (stops “Windows uses 10GB+”)
 
-Create: `C:\Users\\.wslconfig`
+Create: `C:\Users\<yourusername>\.wslconfig`
 
 ```ini
 [wsl2]
@@ -303,17 +303,74 @@ Tuning:
 
 * Daily: 4–6GB
 * Heavy tasks: 8–10GB temporarily → then reduce again
-
-### 5.2 Move WSL distro storage to D: (export/import)
-
+---
+##5.2 WSL 2 Optimization, Migration, and Physical Disk Mounting
+###5.2.1 Global Configuration (.wslconfig)
+To configure resource limits globally for all WSL 2 distributions, the .wslconfig file must be placed in the Windows User Profile directory.
+Path: `%UserProfile%\.wslconfig` (e.g., `C:\Users\<YourName>\.wslconfig`)
+Application: Run `wsl --shutdown` in PowerShell to apply changes.
+###5.2.2 Relocating WSL Distribution to D: Drive
+To move the Ubuntu installation from the C: drive to the D: drive to manage storage effectively:
 ```powershell
-wsl --list --verbose
-mkdir D:\WSL\backup
+# 1. Export the current distribution to a temporary tarball
 wsl --export Ubuntu D:\WSL\backup\Ubuntu.tar
+
+# 2. Unregister (delete) the distribution from the C: drive
 wsl --unregister Ubuntu
+
+# 3. Create the new directory and import the distribution to the D: drive
 mkdir D:\WSL\Ubuntu
 wsl --import Ubuntu D:\WSL\Ubuntu D:\WSL\backup\Ubuntu.tar --version 2
+
+# 4. Set as default
 wsl --set-default Ubuntu
+Use code with caution.
+```
+To verify the registration path, the following PowerShell command queries the Windows Registry:
+```powershell
+Get-ChildItem -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss" | 
+    ForEach-Object { Get-ItemProperty -Path $_.PSPath } | 
+    Select-Object DistributionName, BasePath
+```
+
+###5.2.3 Verifying Distribution and OS Version
+To inspect the internal Linux OS version (e.g., Ubuntu 22.04) without an interactive login:
+```powershell
+# Check WSL Architecture version
+wsl -l -v
+
+# Check internal OS Release version
+wsl -d Ubuntu cat /etc/os-release
+```
+
+###5.2.4 Mounting Physical Dual-Boot NVMe Disks
+To access a physical Linux installation from a separate NVMe drive within WSL 2, we first identified the correct disk using partition GUIDs.
+Disk Analysis Output:
+```text
+DiskNumber PartitionNumber DriveLetter         Size Type     GptType
+---------- --------------- -----------         ---- ----     -------
+         1               4            200000143360 Unknown  {0fc63daf-8483-4772-8e79-3d69d8477de4}
+         1               5            790078947328 Unknown  {0fc63daf-8483-4772-8e79-3d69d8477de4}
+         0               3           C 215591419904 Basic    {ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}
+```
+
+Identification: Disk 1 was identified as the Linux disk because of the GptType `{0fc63daf-...} (Linux Filesystem Data)`. Disk 0 was identified as Windows due to the `{ebd0a0a2-...} GUID (Microsoft Basic Data)`.
+Mounting the Partition:
+```powershell
+# Mount the Root partition from the second NVMe disk
+wsl --mount \\.\PHYSICALDRIVE1 --partition 4
+
+# Access via WSL terminal
+# Files located at: /mnt/wsl/PHYSICALDRIVE1p4
+
+# Unmount before rebooting into Physical Linux
+wsl --unmount \\.\PHYSICALDRIVE1
+```
+
+###5.2.5 Post-Migration Cleanup
+After verifying that the D: drive installation is running and the data is accessible, the temporary backup was removed:
+```powershell
+Remove-Item -Path D:\WSL\backup -Recurse -Force
 ```
 
 ### 5.3 Move Docker Desktop storage to D:

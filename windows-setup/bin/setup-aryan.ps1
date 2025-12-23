@@ -1,88 +1,261 @@
 #requires -Version 5.1
 <#
-setup-aryan.ps1
+.SYNOPSIS
+setup-aryan command dispatcher (Windows PowerShell 5.1)
 
-Purpose:
-  Windows wrapper that runs actions staged in:
-    C:\Tools\aryan-setup\actions\
+.DESCRIPTION
+Stable, idempotent CLI wrapper that runs repo-defined action scripts staged under:
+  C:\Tools\aryan-setup\actions\
 
-Prerequisites:
-  - Staged via windows-setup\stage-aryan-setup.ps1
+Invariants (repo policy):
+- Logs:  D:\aryan-setup\logs\
+- State: D:\aryan-setup\state-files\   (NO JSON; key=value .state files)
+- All actions should support -Force (wrapper forwards it unless already present)
 
-Usage:
+.USAGE
+  setup-aryan -Help
   setup-aryan list
-  setup-aryan <action> [args...]
+  setup-aryan run <action> [-Force] [-- <action args...>]
+  setup-aryan <action> [-Force] [-- <action args...>]
+  setup-aryan version
 
-Logging:
-  - D:\aryan-setup\logs\<action>.log
-  - Format: "<TZ dd-mm-yyyy HH:MM:ss> <LEVEL> <message>"
+.EXAMPLES
+  setup-aryan list
+  setup-aryan run prepare-windows-dev-dirs -Force
+  setup-aryan install-python-toolchain-windows
+  setup-aryan new-python-project-windows -Name demo -Ai -TensorFlow
+  setup-aryan validate-windows-dev
 #>
 
+[CmdletBinding(PositionalBinding=$true)]
 param(
-  [string]$Action = "list",
-  [string[]]$Args = @()
+  [Parameter(Position=0, Mandatory=$false)]
+  [string]$Command = "help",
+
+  [Parameter(Position=1, Mandatory=$false)]
+  [string]$Action = "",
+
+  [Parameter(ValueFromRemainingArguments=$true)]
+  [string[]]$Rest = @(),
+
+  [Parameter(Mandatory=$false)]
+  [switch]$Force,
+
+  [Parameter(Mandatory=$false)]
+  [switch]$Help
 )
 
-$TZ = "India Standard Time"
-$Root = "C:\Tools\aryan-setup"
-$ActionsDir = Join-Path $Root "actions"
-$LogDir = "D:\aryan-setup\logs"
+Set-StrictMode -Version 2
+$ErrorActionPreference = "Stop"
 
-function Get-TimeStamp {
-  try {
-    $now = Get-Date
-    $tz  = [System.TimeZoneInfo]::FindSystemTimeZoneById($TZ)
-    $local = [System.TimeZoneInfo]::ConvertTime($now, $tz)
-    $abbr = "IST"
-    return "{0} {1}" -f $abbr, $local.ToString("dd-MM-yyyy HH:mm:ss")
-  } catch {
-    return (Get-Date).ToString("dd-MM-yyyy HH:mm:ss")
+# ---------------------------
+# Paths (staged tree)
+# ---------------------------
+$LogsRoot  = "D:\aryan-setup\logs"
+$StateRoot = "D:\aryan-setup\state-files"
+
+$ThisScript = $MyInvocation.MyCommand.Path
+$BinDir     = Split-Path -Parent $ThisScript
+$RootDir    = Split-Path -Parent $BinDir
+$ActionsDir = Join-Path $RootDir "actions"
+
+function Ensure-Dir {
+  param([Parameter(Mandatory=$true)][string]$Path)
+  if (-not (Test-Path -LiteralPath $Path)) {
+    New-Item -ItemType Directory -Path $Path -Force | Out-Null
   }
 }
 
-function Log-Line([string]$Level, [string]$Msg) {
-  "{0} {1} {2}" -f (Get-TimeStamp), $Level, $Msg
+function Get-ISTStamp {
+  $tz = [TimeZoneInfo]::FindSystemTimeZoneById("India Standard Time")
+  $nowIst = [TimeZoneInfo]::ConvertTime([DateTime]::Now, $tz)
+  return "IST " + $nowIst.ToString("dd-MM-yyyy HH:mm:ss")
 }
 
-function Ensure-Dirs {
-  New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
-  New-Item -ItemType Directory -Force -Path "D:\aryan-setup\state" | Out-Null
+function Write-LogLine {
+  param(
+    [Parameter(Mandatory=$true)][ValidateSet("Error","Warning","Info","Debug")][string]$Level,
+    [Parameter(Mandatory=$true)][string]$Message,
+    [Parameter(Mandatory=$true)][string]$LogPath
+  )
+  $line = "{0} {1} {2}" -f (Get-ISTStamp), $Level, $Message
+  Add-Content -LiteralPath $LogPath -Value $line -Encoding UTF8
 }
 
-function List-Actions {
-  if (-not (Test-Path $ActionsDir)) {
-    Write-Host "No actions directory found: $ActionsDir"
-    return
+function Write-Log {
+  param(
+    [Parameter(Mandatory=$true)][ValidateSet("Error","Warning","Info","Debug")][string]$Level,
+    [Parameter(Mandatory=$true)][string]$Message
+  )
+  $wrapperLog = Join-Path $LogsRoot "setup-aryan.log"
+  try { Ensure-Dir -Path $LogsRoot } catch {}
+  try { Write-LogLine -Level $Level -Message $Message -LogPath $wrapperLog } catch {}
+
+  switch ($Level) {
+    "Error"   { Write-Error   $Message }
+    "Warning" { Write-Warning $Message }
+    "Info"    { Write-Host    $Message }
+    "Debug"   { Write-Host    $Message }
   }
-  Get-ChildItem -Path $ActionsDir -Filter "*.ps1" -File | Sort-Object Name | ForEach-Object {
-    $_.BaseName
+}
+
+function Assert-Environment {
+  if (-not (Test-Path -LiteralPath "D:\")) {
+    throw "D:\ drive not found. Repo policy expects logs/state on D:\."
+  }
+  Ensure-Dir -Path $LogsRoot
+  Ensure-Dir -Path $StateRoot
+
+  if (-not (Test-Path -LiteralPath $ActionsDir)) {
+    throw "Actions directory not found: $ActionsDir. Re-run: .\windows-setup\stage-aryan-setup.ps1"
   }
 }
 
-Ensure-Dirs
+function Show-Usage {
+@"
+setup-aryan (Windows PowerShell 5.1)
 
-if ($Action -eq "list") {
-  List-Actions
+Usage:
+  setup-aryan -Help
+  setup-aryan list
+  setup-aryan run <action> [-Force] [-- <action args...>]
+  setup-aryan <action> [-Force] [-- <action args...>]
+  setup-aryan version
+
+Notes:
+  - Logs : $LogsRoot
+  - State: $StateRoot   (actions write <action>.state as key=value; NO JSON)
+  - -Force is forwarded to actions (unless already present)
+
+Examples:
+  setup-aryan list
+  setup-aryan run prepare-windows-dev-dirs -Force
+  setup-aryan install-node-toolchain-windows
+  setup-aryan new-python-project-windows -Name demo -Ai -TensorFlow
+"@ | Write-Host
+}
+
+if ($Help -or $Command -eq "help" -or $Command -eq "-h" -or $Command -eq "--help") {
+  Show-Usage
   exit 0
 }
 
-$actionPath = Join-Path $ActionsDir ($Action + ".ps1")
-$logPath = Join-Path $LogDir ($Action + ".log")
-
-if (-not (Test-Path $actionPath)) {
-  Write-Host "Unknown action: $Action"
-  Write-Host "Try: setup-aryan list"
-  exit 2
+function Get-ActionNames {
+  Assert-Environment
+  $files = Get-ChildItem -LiteralPath $ActionsDir -Filter "*.ps1" -File -ErrorAction Stop
+  $names = @()
+  foreach ($f in $files) {
+    $n = [System.IO.Path]::GetFileNameWithoutExtension($f.Name)
+    if ([string]::IsNullOrWhiteSpace($n)) { continue }
+    if ($n.StartsWith("_")) { continue }
+    $names += $n
+  }
+  return ($names | Sort-Object -Unique)
 }
 
-$header = @(
-  Log-Line "INFO"  "setup-aryan: action=$Action user=$env:USERNAME pwd=$(Get-Location)"
-  Log-Line "INFO"  "setup-aryan: action_path=$actionPath"
-  Log-Line "INFO"  "setup-aryan: log_path=$logPath"
-  ""
-) -join "`r`n"
+function Resolve-ActionPath {
+  param([Parameter(Mandatory=$true)][string]$ActionName)
+  Assert-Environment
+  $p = Join-Path $ActionsDir ($ActionName + ".ps1")
+  if (-not (Test-Path -LiteralPath $p)) { return $null }
+  return $p
+}
 
-$header | Tee-Object -FilePath $logPath -Append | Out-Null
+function Cmd-List {
+  $names = Get-ActionNames
+  if ($names.Count -eq 0) {
+    Write-Host "No actions found in: $ActionsDir"
+    return
+  }
+  Write-Host "Actions (from $ActionsDir):"
+  foreach ($n in $names) { Write-Host ("  - {0}" -f $n) }
+}
 
-# Run action and tee output
-& powershell -ExecutionPolicy Bypass -File $actionPath @Args 2>&1 | Tee-Object -FilePath $logPath -Append
+function Cmd-Version {
+  $versionFile = Join-Path $RootDir "VERSION"
+  if (Test-Path -LiteralPath $versionFile) {
+    $v = (Get-Content -LiteralPath $versionFile -ErrorAction Stop | Select-Object -First 1).Trim()
+    if ($v) { Write-Host $v; return }
+  }
+  $ts = (Get-Item -LiteralPath $ThisScript).LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
+  Write-Host ("unknown (setup-aryan.ps1 last-write: {0})" -f $ts)
+}
+
+function Invoke-Action {
+  param(
+    [Parameter(Mandatory=$true)][string]$ActionName,
+    [Parameter(Mandatory=$false)][string[]]$ActionArgs = @()
+  )
+
+  $path = Resolve-ActionPath -ActionName $ActionName
+  if ($null -eq $path) {
+    throw "Unknown action: $ActionName (not found in $ActionsDir)"
+  }
+
+  # Forward -Force if requested and not already present
+  $finalArgs = @()
+  if ($Force) {
+    $hasForce = $false
+    foreach ($a in $ActionArgs) {
+      if ($a -ieq "-Force") { $hasForce = $true; break }
+    }
+    if (-not $hasForce) { $finalArgs += "-Force" }
+  }
+  $finalArgs += $ActionArgs
+
+  Write-Log -Level Info -Message ("Running action: {0} {1}" -f $ActionName, ($finalArgs -join " "))
+  Write-Log -Level Debug -Message ("Action path: {0}" -f $path)
+
+  & $path @finalArgs
+  $rc = $LASTEXITCODE
+
+  if ($rc -ne 0) {
+    Write-Log -Level Error -Message ("Action failed: {0} (rc={1})" -f $ActionName, $rc)
+    exit $rc
+  }
+
+  Write-Log -Level Info -Message ("Action success: {0}" -f $ActionName)
+  exit 0
+}
+
+try {
+  switch ($Command.ToLowerInvariant()) {
+    "list"    { Cmd-List; exit 0 }
+    "version" { Cmd-Version; exit 0 }
+    "run" {
+      if ([string]::IsNullOrWhiteSpace($Action)) {
+        throw "Missing action name. Usage: setup-aryan run <action> [-Force] [-- <action args...>]"
+      }
+
+      # Support `--` separator.
+      $actionArgs = @()
+      if ($Rest.Count -gt 0) {
+        if ($Rest[0] -eq "--") { $actionArgs = $Rest[1..($Rest.Count-1)] } else { $actionArgs = $Rest }
+      }
+
+      Invoke-Action -ActionName $Action -ActionArgs $actionArgs
+    }
+    default {
+      # If first token is an action name, treat as action.
+      $maybeAction = $Command
+      $actionArgs = @()
+      if ($Action) { $actionArgs += $Action }
+      if ($Rest.Count -gt 0) { $actionArgs += $Rest }
+
+      if ($actionArgs.Count -gt 0 -and $actionArgs[0] -eq "--") {
+        $actionArgs = $actionArgs[1..($actionArgs.Count-1)]
+      }
+
+      $path = Resolve-ActionPath -ActionName $maybeAction
+      if ($null -ne $path) {
+        Invoke-Action -ActionName $maybeAction -ActionArgs $actionArgs
+      } else {
+        Show-Usage
+        throw "Unknown command or action: $Command"
+      }
+    }
+  }
+} catch {
+  Write-Log -Level Error -Message $_.Exception.Message
+  exit 1
+}

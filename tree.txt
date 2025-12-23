@@ -1,0 +1,51 @@
+Folder PATH listing for volume Dev Hub
+Volume serial number is EE53-DEE9
+D:.
+|   README.md
+|   README.md.bak
+|   tree.txt
+|   
++---linux-setup
+|   |   stage-aryan-setup.sh
+|   |   
+|   +---actions
+|   |       install-java-linux.sh
+|   |       install-node-toolchain-linux.sh
+|   |       install-python-toolchain-linux.sh
+|   |       install-vscode-linux.sh
+|   |       new-java-project-linux.sh
+|   |       new-node-project-linux.sh
+|   |       new-python-project-linux.sh
+|   |       recover-linux-gui-igpu-deb.sh
+|   |       validate-linux-gpu.sh
+|   |       
+|   +---bin
+|   |       setup-aryan
+|   |       setup-aryan-log
+|   |       
+|   \---completions
+|           setup-aryan.bash
+|           
+\---windows-setup
+    |   stage-aryan-setup.ps1
+    |   
+    +---actions
+    |       create-chrome-launcher-d.ps1
+    |       enable-wsl-and-virtualization.ps1
+    |       install-java-windows.ps1
+    |       install-node-toolchain-windows.ps1
+    |       install-python-toolchain-windows.ps1
+    |       install-vscode-windows.ps1
+    |       install-winget-devtools.ps1
+    |       move-wsl-to-d.ps1
+    |       new-java-project-windows.ps1
+    |       new-node-project-windows.ps1
+    |       new-python-project-windows.ps1
+    |       prepare-windows-dev-dirs.ps1
+    |       validate-windows-dev.ps1
+    |       validate-wsl-docker-storage.ps1
+    |       
+    \---bin
+            setup-aryan-log.ps1
+            setup-aryan.ps1
+            

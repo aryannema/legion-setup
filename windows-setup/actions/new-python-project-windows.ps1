@@ -1,292 +1,385 @@
+#requires -Version 5.1
 <#
-Prerequisites
-- Windows 11
-- PowerShell 5.1+
-- Python toolchain installed (Miniconda + uv recommended)
-- D:\dev exists (or script will create it)
+Creates a new Python project scaffold aligned with the Aryan workstation toolchain.
+
+Key points
+- Uses Conda env prefix (per-project) under: D:\dev\envs\conda\<project>
+- Uses uv for dependency install (uv pip install -r requirements.txt)
+- Writes VS Code settings pointing to the env interpreter
+- Supports BOTH flags (can co-exist):
+  -Ai
+  -TensorFlow
 
 Usage
-  powershell -File .\new-python-project-windows.ps1 -Help
-  powershell -File .\new-python-project-windows.ps1 -Name demo-ml -Ai
-  powershell -File .\new-python-project-windows.ps1 -Name demo-py -BaseDir D:\dev\projects
+  setup-aryan new-python-project-windows -Name myproj
+  setup-aryan new-python-project-windows -Name myproj -Ai
+  setup-aryan new-python-project-windows -Name myproj -TensorFlow
+  setup-aryan new-python-project-windows -Name myproj -Ai -TensorFlow
+  setup-aryan new-python-project-windows -Name myproj -Force
 
-What it generates
-- README.md + Quick Start
-- project_config.yaml
-- pyproject.toml
-- requirements.txt
-- src\main.py
-- scripts\run.ps1, dev.ps1, test.ps1, lint.ps1
-- .gitignore
+Notes
+- This action does not install the toolchain. Run:
+    setup-aryan install-python-toolchain-windows
+  first.
 
-Logging / State
-- Logs : D:\aryan-setup\logs\new-python-project-windows.log
-- State: D:\aryan-setup\state\new-python-project-windows.state.json
+State (NO JSON)
+  D:\aryan-setup\state-files\new-python-project-windows.state
 #>
 
 [CmdletBinding()]
 param(
-  [switch]$Help,
-  [Parameter(Mandatory=$false)] [string]$Name,
-  [Parameter(Mandatory=$false)] [string]$BaseDir = "D:\dev\projects",
-  [switch]$Ai
+  [Parameter(Mandatory=$true)]
+  [ValidatePattern("^[a-zA-Z0-9][a-zA-Z0-9\-_]+$")]
+  [string]$Name,
+
+  [Parameter(Mandatory=$false)]
+  [string]$ProjectsRoot = "D:\dev\projects",
+
+  [Parameter(Mandatory=$false)]
+  [string]$DevRoot = "D:\dev",
+
+  [Parameter(Mandatory=$false)]
+  [switch]$Ai,
+
+  [Parameter(Mandatory=$false)]
+  [switch]$TensorFlow,
+
+  [Parameter(Mandatory=$false)]
+  [switch]$Force,
+
+  [Parameter(Mandatory=$false)]
+  [switch]$Help
 )
 
-Set-StrictMode -Version Latest
+Set-StrictMode -Version 2
 $ErrorActionPreference = "Stop"
 
-function Get-ISTTimestamp {
+$ActionName = "new-python-project-windows"
+$LogsRoot   = "D:\aryan-setup\logs"
+$StateRoot  = "D:\aryan-setup\state-files"
+$LogFile    = Join-Path $LogsRoot  "$ActionName.log"
+$StateFile  = Join-Path $StateRoot "$ActionName.state"
+
+function Show-Help { Get-Help -Detailed $MyInvocation.MyCommand.Path }
+if ($Help) { Show-Help; exit 0 }
+
+function Ensure-Dir([string]$Path) { if (-not (Test-Path -LiteralPath $Path)) { New-Item -ItemType Directory -Path $Path -Force | Out-Null } }
+
+function Get-ISTStamp {
   $tz = [TimeZoneInfo]::FindSystemTimeZoneById("India Standard Time")
   $nowIst = [TimeZoneInfo]::ConvertTime([DateTime]::Now, $tz)
   return "IST " + $nowIst.ToString("dd-MM-yyyy HH:mm:ss")
 }
+function Write-Log([ValidateSet("Error","Warning","Info","Debug")] [string]$Level, [string]$Message) {
+  Ensure-Dir $LogsRoot
+  Add-Content -LiteralPath $LogFile -Value "$(Get-ISTStamp) $Level $Message" -Encoding UTF8
+  switch ($Level) {
+    "Error"   { Write-Error   $Message }
+    "Warning" { Write-Warning $Message }
+    "Info"    { Write-Host    $Message }
+    "Debug"   { Write-Host    $Message }
+  }
+}
+function Get-ISO8601 { (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssK") }
+function Get-Version { return "1.1.0" }
 
-function Write-Log {
-  param(
-    [ValidateSet("Error","Warning","Info","Debug")] [string]$Level,
-    [string]$Message
+function Read-State {
+  if (-not (Test-Path -LiteralPath $StateFile)) { return $null }
+  $map = @{}
+  foreach ($ln in (Get-Content -LiteralPath $StateFile -ErrorAction Stop)) {
+    if ([string]::IsNullOrWhiteSpace($ln)) { continue }
+    if ($ln.TrimStart().StartsWith("#")) { continue }
+    $idx = $ln.IndexOf("="); if ($idx -lt 1) { continue }
+    $k = $ln.Substring(0, $idx).Trim()
+    $v = $ln.Substring($idx + 1).Trim()
+    if ($k.Length -gt 0) { $map[$k] = $v }
+  }
+  return $map
+}
+
+function Write-State([string]$Status, [int]$Rc, [string]$StartedAt, [string]$FinishedAt) {
+  Ensure-Dir $StateRoot
+  $content = @(
+    "action=$ActionName",
+    "status=$Status",
+    "rc=$Rc",
+    "started_at=$StartedAt",
+    "finished_at=$FinishedAt",
+    "user=$([Environment]::UserName)",
+    "host=$env:COMPUTERNAME",
+    "log_path=$LogFile",
+    "version=$(Get-Version)"
   )
-  $line = "$(Get-ISTTimestamp) $Level $Message"
-  Add-Content -Path $script:LogFile -Value $line -Encoding UTF8
-  Write-Host $line
+  $tmp = "$StateFile.tmp"
+  Set-Content -LiteralPath $tmp -Value $content -Encoding UTF8
+  Move-Item -LiteralPath $tmp -Destination $StateFile -Force
 }
 
-function Ensure-Dir([string]$Path) {
-  if (-not (Test-Path -LiteralPath $Path)) {
-    New-Item -ItemType Directory -Path $Path -Force | Out-Null
-  }
-}
-
-function Write-IfMissing([string]$Path, [string]$Content, [string]$Encoding="utf8") {
-  if (Test-Path -LiteralPath $Path) {
-    Write-Log -Level Debug -Message "Exists, not overwriting: $Path"
-    return
-  }
+function Write-Text([string]$Path, [string]$Content) {
   Ensure-Dir (Split-Path -Parent $Path)
-  Set-Content -Path $Path -Value $Content -Encoding $Encoding
-  Write-Log -Level Info -Message "Created: $Path"
+  Set-Content -LiteralPath $Path -Value $Content -Encoding UTF8
 }
 
-function Append-IfMissing([string]$Path, [string]$Marker, [string]$Block) {
-  if (-not (Test-Path -LiteralPath $Path)) { return }
-  $txt = Get-Content -LiteralPath $Path -Raw -ErrorAction SilentlyContinue
-  if ($txt -and $txt.Contains($Marker)) { return }
-  Add-Content -Path $Path -Value "`r`n$Block" -Encoding UTF8
-  Write-Log -Level Info -Message "Appended block to: $Path"
+function Assert-Toolchain {
+  if (-not (Get-Command conda -ErrorAction SilentlyContinue)) {
+    throw "conda not found. Run: setup-aryan install-python-toolchain-windows"
+  }
+  if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+    throw "uv not found. Run: setup-aryan install-python-toolchain-windows"
+  }
 }
 
-function Save-State([hashtable]$State) {
-  $json = $State | ConvertTo-Json -Depth 8
-  Set-Content -Path $script:StateFile -Value $json -Encoding UTF8
+function Ensure-CondaActivated {
+  # In PS 5.1, conda activation usually needs the shell hook.
+  $condaExe = (Get-Command conda -ErrorAction SilentlyContinue).Source
+  if (-not $condaExe) { return }
+  try { (& $condaExe "shell.powershell" "hook") | Out-String | Invoke-Expression } catch {}
 }
 
-function Show-Help {
-@"
-new-python-project-windows.ps1
+# ---------------------------
+# Main
+# ---------------------------
+if (-not (Test-Path -LiteralPath "D:\")) { Write-Error "D:\ drive not found." ; exit 1 }
 
-Usage:
-  powershell -File .\new-python-project-windows.ps1 -Name <project> [-BaseDir <dir>] [-Ai]
-  powershell -File .\new-python-project-windows.ps1 -Help
-
-Creates a complete Python starter kit (conda + uv workflow).
-"@ | Write-Host
-}
-
-if ($Help) { Show-Help; exit 0 }
-if (-not $Name) { throw "Missing -Name. Use -Help for usage." }
-if ($Name -notmatch '^[a-zA-Z0-9._-]+$') { throw "Invalid -Name '$Name' (use letters/digits/dot/underscore/hyphen)" }
-
-# Logs/state
-$LogRoot   = "D:\aryan-setup\logs"
-$StateRoot = "D:\aryan-setup\state"
-Ensure-Dir $LogRoot
+Ensure-Dir $LogsRoot
 Ensure-Dir $StateRoot
-$script:LogFile   = Join-Path $LogRoot "new-python-project-windows.log"
-$script:StateFile = Join-Path $StateRoot "new-python-project-windows.state.json"
 
-Write-Log -Level Info -Message "=== START new-python-project-windows (Name=$Name BaseDir=$BaseDir Ai=$Ai) ==="
+$startedAt = Get-ISO8601
 
-Ensure-Dir $BaseDir
-$ProjectDir = Join-Path $BaseDir $Name
-Ensure-Dir $ProjectDir
+try {
+  $prev = Read-State
+  if ($prev -ne $null -and -not $Force) {
+    if ($prev.ContainsKey("status") -and $prev["status"] -eq "success") {
+      Write-Log Info "State indicates previous success; skipping. Use -Force to re-run."
+      Write-State "skipped" 0 $startedAt (Get-ISO8601)
+      exit 0
+    }
+  }
+} catch { }
 
-# Idempotent: do not overwrite existing content
-$existing = Get-ChildItem -LiteralPath $ProjectDir -Force -ErrorAction SilentlyContinue
-if ($existing.Count -gt 0) {
-  Write-Log -Level Warning -Message "Project dir exists and is not empty: $ProjectDir"
-  Write-Log -Level Warning -Message "Idempotent mode: only missing files will be created (no overwrites)."
+$rc = 0
+$status = "success"
+
+try {
+  Assert-Toolchain
+  Ensure-CondaActivated
+
+  Ensure-Dir $ProjectsRoot
+  $ProjectDir = Join-Path $ProjectsRoot $Name
+  $EnvDir     = Join-Path (Join-Path $DevRoot "envs\conda") $Name
+
+  if (-not (Test-Path -LiteralPath $ProjectDir)) {
+    New-Item -ItemType Directory -Path $ProjectDir -Force | Out-Null
+  } else {
+    # If directory exists and not -Force, refuse if it looks non-empty (to avoid clobber)
+    $items = Get-ChildItem -LiteralPath $ProjectDir -Force -ErrorAction SilentlyContinue
+    if ($items.Count -gt 0 -and -not $Force) {
+      throw "Project directory already exists and is not empty: $ProjectDir. Re-run with -Force to overwrite scaffold files."
+    }
+  }
+
+  Ensure-Dir (Join-Path $ProjectDir "src")
+  Ensure-Dir (Join-Path $ProjectDir "scripts")
+  Ensure-Dir (Join-Path $ProjectDir ".vscode")
+
+  # requirements (minimal; heavy libs only when flags enabled)
+  $req = @()
+  $req += "pytest"
+  $req += "ruff"
+  if ($Ai) {
+    $req += "numpy"
+    $req += "pandas"
+    $req += "scikit-learn"
+    $req += "matplotlib"
+  }
+  if ($TensorFlow) {
+    $req += "tensorflow"
+  }
+  $requirementsTxt = ($req | Sort-Object -Unique) -join "`r`n"
+  Write-Text -Path (Join-Path $ProjectDir "requirements.txt") -Content $requirementsTxt
+
+  # project config
+  $cfg = @"
+name: $Name
+language: python
+paths:
+  project_root: $ProjectDir
+  conda_env_prefix: $EnvDir
+flags:
+  ai_ml: $($Ai.ToString().ToLowerInvariant())
+  tensorflow: $($TensorFlow.ToString().ToLowerInvariant())
+toolchain:
+  conda: true
+  uv: true
+"@
+  Write-Text -Path (Join-Path $ProjectDir "project_config.yaml") -Content $cfg
+
+  # VS Code settings -> point to env python
+  $vscode = @"
+{
+  "python.defaultInterpreterPath": "D:\\dev\\envs\\conda\\$Name\\python.exe",
+  "python.terminal.activateEnvironment": true,
+  "python.analysis.typeCheckingMode": "basic",
+  "python.analysis.diagnosticSeverityOverrides": {
+    "reportMissingImports": "warning"
+  }
 }
-
-Ensure-Dir (Join-Path $ProjectDir "src")
-Ensure-Dir (Join-Path $ProjectDir "scripts")
-
-$TemplateVersion = "1.0.0"
-$CreatedAt = Get-ISTTimestamp
-
-Write-IfMissing (Join-Path $ProjectDir ".gitignore") @"
-.venv/
-__pycache__/
-*.pyc
-.pytest_cache/
-.coverage
-dist/
-build/
-*.egg-info/
-.env
-.DS_Store
 "@
+  Write-Text -Path (Join-Path $ProjectDir ".vscode\settings.json") -Content $vscode
 
-Write-IfMissing (Join-Path $ProjectDir "requirements.txt") @"
-# Add your Python deps here (pip-style), then run:
-#   uv pip install -r requirements.txt
-"@
-
-Write-IfMissing (Join-Path $ProjectDir "pyproject.toml") @"
-[project]
-name = "$Name"
-version = "0.1.0"
-description = "$Name (generated by setup-aryan)"
-readme = "README.md"
-requires-python = ">=3.11"
-
-[tool.uv]
-# Let conda own the interpreter; uv owns pip installs.
-"@
-
-Write-IfMissing (Join-Path $ProjectDir "src\main.py") @"
+  # Main source
+  $main = @"
 def main() -> None:
     print("Hello from $Name!")
-    print("If this is an AI/ML project, activate your conda env and install deps via uv.")
 
 if __name__ == "__main__":
     main()
 "@
+  Write-Text -Path (Join-Path $ProjectDir "src\main.py") -Content $main
 
-Write-IfMissing (Join-Path $ProjectDir "scripts\run.ps1") @"
-<#
-Usage:
-  powershell -File .\scripts\run.ps1
-#>
-python .\src\main.py
-"@
+  # dev script (create/activate env + install deps)
+  $dev = @"
+#requires -Version 5.1
+param(
+  [switch]`$Reinstall
+)
 
-Write-IfMissing (Join-Path $ProjectDir "scripts\dev.ps1") @"
-<#
-Usage:
-  powershell -File .\scripts\dev.ps1
+`$ErrorActionPreference = "Stop"
 
-Notes (conda + uv):
-  conda activate <env>
-  uv pip install -r requirements.txt
-#>
-powershell -File .\scripts\run.ps1
-"@
-
-Write-IfMissing (Join-Path $ProjectDir "scripts\test.ps1") @"
-<#
-Usage:
-  powershell -File .\scripts\test.ps1
-#>
-Write-Host "No tests configured yet."
-exit 0
-"@
-
-Write-IfMissing (Join-Path $ProjectDir "scripts\lint.ps1") @"
-<#
-Usage:
-  powershell -File .\scripts\lint.ps1
-
-Tip:
-  uv pip install ruff black
-  ruff check .
-  black --check .
-#>
-Write-Host "No lint configured yet."
-exit 0
-"@
-
-# project_config.yaml
-$AiEnabled = if ($Ai) { "true" } else { "false" }
-
-Write-IfMissing (Join-Path $ProjectDir "project_config.yaml") @"
-project:
-  name: "$Name"
-  type: "python"
-  created_at: "$CreatedAt"
-  template_version: "$TemplateVersion"
-
-python:
-  toolchain: "conda+uv"
-  caches:
-    uv_cache_dir: "D:\dev\cache\uv"
-    conda_pkgs_dir: "D:\dev\cache\conda\pkgs"
-    conda_envs_dir: "D:\dev\envs\conda\envs"
-
-ai_ml:
-  enabled: $AiEnabled
-"@
-
-# README.md
-$Readme = @"
-# $Name
-
-This project was generated by **setup-aryan** on Windows.
-
-## Quick Start (Windows)
-
-### 1) Create and activate conda env
-Example env name: \`$Name-py\`
-
-```powershell
-conda create -n $Name-py python=3.11 -y
-conda activate $Name-py
-````
-
-### 2) Install deps with uv (inside the active conda env)
-
-```powershell
-uv pip install -r requirements.txt
-```
-
-### 3) Run
-
-```powershell
-powershell -File .\scripts\run.ps1
-```
-
-## What got generated
-
-* `project_config.yaml`: toolchain + cache expectations
-* `requirements.txt`: add deps here
-* `src\main.py`: runnable entrypoint
-* `scripts\*.ps1`: helper runners
-
-## Notes on disk usage (conda + uv)
-
-Keep projects under `D:\dev\projects` and caches under `D:\dev\cache`.
-
-uv keeps a global cache and hard-links where possible to reduce duplication.
-"@
-
-Write-IfMissing (Join-Path $ProjectDir "README.md") $Readme
-
-if ($Ai) {
-Append-IfMissing (Join-Path $ProjectDir "README.md") "## AI/ML Notes (Windows GPU)" @"
-
-## AI/ML Notes (Windows GPU)
-
-* For GUI apps, Windows typically uses iGPU by default unless you override Graphics settings.
-* For ML training, you’ll usually run workloads that explicitly use CUDA (NVIDIA) when available.
-  "@
+function Ensure-CondaHook {
+  if (Get-Command conda -ErrorAction SilentlyContinue) {
+    (`& (Get-Command conda).Source "shell.powershell" "hook") | Out-String | Invoke-Expression
+  } else {
+    throw "conda not found"
   }
-
-Save-State @{
-status     = "ok"
-project_dir= $ProjectDir
-ai_mode    = [bool]$Ai
-at         = (Get-ISTTimestamp)
 }
 
-Write-Log -Level Info -Message "=== DONE new-python-project-windows ==="
-Write-Log -Level Info -Message "Project: $ProjectDir"
-exit 0
+Ensure-CondaHook
+
+`$EnvDir = "D:\dev\envs\conda\$Name"
+if (-not (Test-Path -LiteralPath `$EnvDir)) {
+  Write-Host "Creating conda env: `$EnvDir"
+  conda create -y -p `$EnvDir python=3.11
+}
+
+conda activate `$EnvDir
+
+if (`$Reinstall) {
+  Write-Host "Reinstall requested; upgrading pip"
+  python -m pip install -U pip
+}
+
+Write-Host "Installing deps with uv (requirements.txt)"
+uv pip install -r (Join-Path `"$ProjectDir`" "requirements.txt")
+
+Write-Host ""
+Write-Host "Ready."
+Write-Host "Run:"
+Write-Host "  python src\main.py"
+"@
+  Write-Text -Path (Join-Path $ProjectDir "scripts\dev.ps1") -Content $dev
+
+  $run = @"
+#requires -Version 5.1
+`$ErrorActionPreference = "Stop"
+
+# Activate env + run
+if (Get-Command conda -ErrorAction SilentlyContinue) {
+  (`& (Get-Command conda).Source "shell.powershell" "hook") | Out-String | Invoke-Expression
+  conda activate "D:\dev\envs\conda\$Name"
+} else {
+  throw "conda not found"
+}
+
+python (Join-Path `"$ProjectDir`" "src\main.py")
+"@
+  Write-Text -Path (Join-Path $ProjectDir "scripts\run.ps1") -Content $run
+
+  # TensorFlow validation (only if TensorFlow flag enabled)
+  if ($TensorFlow) {
+    $tfPy = @"
+import os
+import time
+
+# Keep logs quieter
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "1")
+
+import tensorflow as tf  # noqa: E402
+
+def main() -> None:
+    print("TensorFlow:", tf.__version__)
+    gpus = tf.config.list_physical_devices("GPU")
+    print("GPUs:", gpus)
+
+    # Avoid grabbing all VRAM (helps notebooks too)
+    for g in gpus:
+        try:
+            tf.config.experimental.set_memory_growth(g, True)
+        except Exception as e:
+            print("Could not set memory growth:", e)
+
+    a = tf.random.uniform((2048, 2048))
+    b = tf.random.uniform((2048, 2048))
+
+    t0 = time.time()
+    c = tf.linalg.matmul(a, b)
+    _ = c.numpy()  # force execution
+    t1 = time.time()
+
+    print("Matmul OK. Seconds:", round(t1 - t0, 3))
+    print("If this was your first run, slower time is normal due to CUDA/PTX/XLA warmup.")
+
+if __name__ == "__main__":
+    main()
+"@
+    Write-Text -Path (Join-Path $ProjectDir "src\validate_tf.py") -Content $tfPy
+
+    $tfPs = @"
+#requires -Version 5.1
+`$ErrorActionPreference = "Stop"
+
+if (Get-Command conda -ErrorAction SilentlyContinue) {
+  (`& (Get-Command conda).Source "shell.powershell" "hook") | Out-String | Invoke-Expression
+  conda activate "D:\dev\envs\conda\$Name"
+} else {
+  throw "conda not found"
+}
+
+python (Join-Path `"$ProjectDir`" "src\validate_tf.py")
+"@
+    Write-Text -Path (Join-Path $ProjectDir "scripts\validate_tf.ps1") -Content $tfPs
+  }
+
+  # README
+  $flagsLine = "- AI/ML: " + ($Ai ? "enabled" : "disabled") + "`r`n- TensorFlow: " + ($TensorFlow ? "enabled" : "disabled")
+  $readme = @"
+# $Name
+
+Scaffold created by `new-python-project-windows.ps1` (toolchain: conda + uv).
+
+## Flags
+$flagsLine
+
+## Layout
+- `src/` - app code
+- `scripts/` - helper scripts (env/run/test)
+- `requirements.txt` - Python deps (installed via `uv pip` inside the conda env)
+- `project_config.yaml` - local metadata (includes flags)
+
+## Quick start (PowerShell)
+1) Create/activate env + install deps:
+```powershell
+.\scripts\dev.ps1
+"@
+Write-Text -Path (Join-Path $ProjectDir "README.md") -Content $readme
+
+Write-Log Info "Project created: $ProjectDir"
+Write-Log Info "Env prefix (to be created by scripts/dev.ps1): $EnvDir"
+} catch {
+$rc = 1
+$status = "failed"
+Write-Log Error $_.Exception.Message
+}
+
+Write-State $status $rc $startedAt (Get-ISO8601)
+exit $rc

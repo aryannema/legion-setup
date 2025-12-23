@@ -1,0 +1,1064 @@
+diff --git a/windows-setup/bin/setup-aryan-log.ps1 b/windows-setup/bin/setup-aryan-log.ps1
+index 0e3fe51..c6f02e3 100755
+--- a/windows-setup/bin/setup-aryan-log.ps1
++++ b/windows-setup/bin/setup-aryan-log.ps1
+@@ -1,47 +1,150 @@
+-#requires -Version 5.1
+ <#
+-setup-aryan-log.ps1
++.SYNOPSIS
++Shows logs for setup-aryan (Windows PowerShell 5.1)
+ 
+-Purpose:
+-  View logs for a staged Windows action.
++.DESCRIPTION
++Reads logs from:
++  D:\aryan-setup\logs\
+ 
+-Prerequisites:
+-  - Logs stored in D:\aryan-setup\logs\
++Supports:
++- list (default): shows most recent log files
++- tail: tails a specific log file (best-effort in PS 5.1)
++- show: prints an entire log file
++- grep: simple substring filter (no regex required)
+ 
+-Usage:
+-  setup-aryan-log list
+-  setup-aryan-log <action>
+-  setup-aryan-log <action> -Follow
++This script does NOT modify system state. It is safe to run anytime.
++
++.PREREQUISITES
++- Windows PowerShell 5.1
++- Logs directory exists (created by staging/actions): D:\aryan-setup\logs\
++
++.PARAMETER Help
++Show help.
++
++.PARAMETER Command
++One of: list, tail, show, grep
++
++.PARAMETER Name
++Log file name (e.g., stage-windows-setup.log). If not provided, uses setup-aryan.log when applicable.
++
++.PARAMETER Lines
++For tail: number of last lines to show (default 200)
++
++.PARAMETER Contains
++For grep: substring to match (case-insensitive)
++
++.EXAMPLE
++setup-aryan-log list
++
++.EXAMPLE
++setup-aryan-log tail -Name stage-windows-setup.log -Lines 200
++
++.EXAMPLE
++setup-aryan-log show -Name setup-aryan.log
++
++.EXAMPLE
++setup-aryan-log grep -Name setup-aryan.log -Contains "Error"
+ #>
+ 
++[CmdletBinding(PositionalBinding=$true)]
+ param(
+-  [string]$Action = "list",
+-  [switch]$Follow
++  [Parameter(Position=0, Mandatory=$false)]
++  [ValidateSet("list","tail","show","grep","help")]
++  [string]$Command = "list",
++
++  [Parameter(Mandatory=$false)]
++  [string]$Name = "",
++
++  [Parameter(Mandatory=$false)]
++  [int]$Lines = 200,
++
++  [Parameter(Mandatory=$false)]
++  [string]$Contains = "",
++
++  [Parameter(Mandatory=$false)]
++  [switch]$Help
+ )
+ 
+-$LogDir = "D:\aryan-setup\logs"
++Set-StrictMode -Version 2
++$ErrorActionPreference = "Stop"
++
++function Show-Help {
++  Get-Help -Detailed $MyInvocation.MyCommand.Path
++}
++
++if ($Help -or $Command -eq "help") { Show-Help; exit 0 }
++
++$LogsRoot = "D:\aryan-setup\logs"
++
++function Ensure-LogsRoot {
++  if (-not (Test-Path -LiteralPath $LogsRoot)) {
++    throw "Logs directory not found: $LogsRoot"
++  }
++}
+ 
+-if (-not (Test-Path $LogDir)) {
+-  Write-Host "No log directory found: $LogDir"
+-  exit 0
++function Resolve-LogPath {
++  param([Parameter(Mandatory=$false)][string]$LogName)
++  if ([string]::IsNullOrWhiteSpace($LogName)) {
++    $LogName = "setup-aryan.log"
++  }
++  $p = Join-Path $LogsRoot $LogName
++  if (-not (Test-Path -LiteralPath $p)) {
++    throw "Log not found: $p"
++  }
++  return $p
+ }
+ 
+-if ($Action -eq "list") {
+-  Get-ChildItem -Path $LogDir -Filter "*.log" -File | Sort-Object Name | ForEach-Object {
+-    $_.Name
++function Cmd-List {
++  Ensure-LogsRoot
++  $files = Get-ChildItem -LiteralPath $LogsRoot -Filter "*.log" -File | Sort-Object LastWriteTime -Descending
++  if ($files.Count -eq 0) {
++    Write-Host "No log files found in: $LogsRoot"
++    return
++  }
++  Write-Host "Logs in $LogsRoot (newest first):"
++  foreach ($f in ($files | Select-Object -First 30)) {
++    $sz = "{0:n0}" -f $f.Length
++    Write-Host ("  {0,-28}  {1}  {2,10} bytes" -f $f.Name, $f.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss"), $sz)
+   }
+-  exit 0
+ }
+ 
+-$path = Join-Path $LogDir ($Action + ".log")
+-if (-not (Test-Path $path)) {
+-  Write-Host "No log found: $path"
+-  Write-Host "Try: setup-aryan-log list"
+-  exit 2
++function Cmd-Show {
++  Ensure-LogsRoot
++  $p = Resolve-LogPath -LogName $Name
++  Get-Content -LiteralPath $p -ErrorAction Stop
+ }
+ 
+-if ($Follow) {
+-  Get-Content -Path $path -Tail 200 -Wait
+-} else {
+-  Get-Content -Path $path -Tail 200
++function Cmd-Tail {
++  Ensure-LogsRoot
++  $p = Resolve-LogPath -LogName $Name
++  if ($Lines -lt 1) { $Lines = 200 }
++
++  # Tail only (no follow) in PS 5.1 via Get-Content -Tail
++  Get-Content -LiteralPath $p -Tail $Lines -ErrorAction Stop
++}
++
++function Cmd-Grep {
++  Ensure-LogsRoot
++  if ([string]::IsNullOrWhiteSpace($Contains)) {
++    throw "grep requires -Contains <substring>"
++  }
++  $p = Resolve-LogPath -LogName $Name
++  $needle = $Contains.ToLowerInvariant()
++  $lines = Get-Content -LiteralPath $p -ErrorAction Stop
++  foreach ($ln in $lines) {
++    if ($ln.ToLowerInvariant().Contains($needle)) { $ln }
++  }
++}
++
++try {
++  switch ($Command) {
++    "list" { Cmd-List; exit 0 }
++    "show" { Cmd-Show; exit 0 }
++    "tail" { Cmd-Tail; exit 0 }
++    "grep" { Cmd-Grep; exit 0 }
++    default { Show-Help; exit 1 }
++  }
++} catch {
++  Write-Error $_.Exception.Message
++  exit 1
+ }
+diff --git a/windows-setup/bin/setup-aryan.ps1 b/windows-setup/bin/setup-aryan.ps1
+index 19315bc..e2f57f5 100755
+--- a/windows-setup/bin/setup-aryan.ps1
++++ b/windows-setup/bin/setup-aryan.ps1
+@@ -1,88 +1,293 @@
+-#requires -Version 5.1
+ <#
+-setup-aryan.ps1
++.SYNOPSIS
++setup-aryan command dispatcher (Windows PowerShell 5.1)
+ 
+-Purpose:
+-  Windows wrapper that runs actions staged in:
+-    C:\Tools\aryan-setup\actions\
++.DESCRIPTION
++Provides a stable, idempotent CLI wrapper to run repo-defined actions staged under:
++  C:\Tools\aryan-setup\actions\
+ 
+-Prerequisites:
+-  - Staged via windows-setup\stage-aryan-setup.ps1
++Key invariants:
++- Windows PowerShell 5.1 compatible
++- Logs:  D:\aryan-setup\logs\
++- State: D:\aryan-setup\state-files\   (actions write <action>.state as key=value; NO JSON)
++- Force semantics:
++  - This wrapper supports -Force and forwards it to actions as -Force (unless already present)
+ 
+-Usage:
++This wrapper itself does not define state for every command; action scripts are responsible for:
++- idempotency checks
++- writing <action>.state
++- writing action logs in the standard format
++
++.PREREQUISITES
++- Windows PowerShell 5.1
++- Actions must be staged next to this file at: ..\actions\
++- D:\ drive should exist (per repo storage policy), because logs/state live on D:\
++
++.USAGE
++  setup-aryan -Help
+   setup-aryan list
+-  setup-aryan <action> [args...]
++  setup-aryan run <action> [-Force] [-- <action args...>]
++  setup-aryan <action> [-Force] [-- <action args...>]
++  setup-aryan version
+ 
+-Logging:
+-  - D:\aryan-setup\logs\<action>.log
+-  - Format: "<TZ dd-mm-yyyy HH:MM:ss> <LEVEL> <message>"
++.EXAMPLES
++  setup-aryan list
++  setup-aryan run stage-windows-setup -Force
++  setup-aryan validate-windows-dev -- -Verbose
+ #>
+ 
++[CmdletBinding(PositionalBinding=$true)]
+ param(
+-  [string]$Action = "list",
+-  [string[]]$Args = @()
++  [Parameter(Position=0, Mandatory=$false)]
++  [string]$Command = "help",
++
++  [Parameter(Position=1, Mandatory=$false)]
++  [string]$Action = "",
++
++  [Parameter(ValueFromRemainingArguments=$true)]
++  [string[]]$Rest = @(),
++
++  [Parameter(Mandatory=$false)]
++  [switch]$Force,
++
++  [Parameter(Mandatory=$false)]
++  [switch]$Help
+ )
+ 
+-$TZ = "India Standard Time"
+-$Root = "C:\Tools\aryan-setup"
+-$ActionsDir = Join-Path $Root "actions"
+-$LogDir = "D:\aryan-setup\logs"
+-
+-function Get-TimeStamp {
+-  try {
+-    $now = Get-Date
+-    $tz  = [System.TimeZoneInfo]::FindSystemTimeZoneById($TZ)
+-    $local = [System.TimeZoneInfo]::ConvertTime($now, $tz)
+-    $abbr = "IST"
+-    return "{0} {1}" -f $abbr, $local.ToString("dd-MM-yyyy HH:mm:ss")
+-  } catch {
+-    return (Get-Date).ToString("dd-MM-yyyy HH:mm:ss")
++Set-StrictMode -Version 2
++$ErrorActionPreference = "Stop"
++
++# ---------------------------
++# Logging (wrapper-level)
++# ---------------------------
++$LogsRoot  = "D:\aryan-setup\logs"
++$StateRoot = "D:\aryan-setup\state-files"
++
++function Ensure-Dir {
++  param([Parameter(Mandatory=$true)][string]$Path)
++  if (-not (Test-Path -LiteralPath $Path)) {
++    New-Item -ItemType Directory -Path $Path -Force | Out-Null
+   }
+ }
+ 
+-function Log-Line([string]$Level, [string]$Msg) {
+-  "{0} {1} {2}" -f (Get-TimeStamp), $Level, $Msg
++function Get-TzOffsetString {
++  $offset = [System.TimeZoneInfo]::Local.GetUtcOffset([DateTime]::Now)
++  $sign = if ($offset.TotalMinutes -ge 0) { "+" } else { "-" }
++  $hh = [Math]::Abs([int]$offset.Hours).ToString("00")
++  $mm = [Math]::Abs([int]$offset.Minutes).ToString("00")
++  return "$sign$hh`:$mm"
+ }
+ 
+-function Ensure-Dirs {
+-  New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+-  New-Item -ItemType Directory -Force -Path "D:\aryan-setup\state" | Out-Null
++function Get-Stamp {
++  $tz = Get-TzOffsetString
++  $dt = Get-Date
++  return ("{0} {1}" -f $tz, $dt.ToString("dd-MM-yyyy HH:mm:ss"))
+ }
+ 
+-function List-Actions {
+-  if (-not (Test-Path $ActionsDir)) {
+-    Write-Host "No actions directory found: $ActionsDir"
+-    return
++function Write-LogLine {
++  param(
++    [Parameter(Mandatory=$true)][ValidateSet("Error","Warning","Info","Debug")][string]$Level,
++    [Parameter(Mandatory=$true)][string]$Message,
++    [Parameter(Mandatory=$true)][string]$LogPath
++  )
++  $line = "{0} {1} {2}" -f (Get-Stamp), $Level, $Message
++  Add-Content -LiteralPath $LogPath -Value $line -Encoding UTF8
++}
++
++function Write-Log {
++  param(
++    [Parameter(Mandatory=$true)][ValidateSet("Error","Warning","Info","Debug")][string]$Level,
++    [Parameter(Mandatory=$true)][string]$Message
++  )
++  $wrapperLog = Join-Path $LogsRoot "setup-aryan.log"
++  try { Ensure-Dir -Path $LogsRoot } catch {}
++  try { Write-LogLine -Level $Level -Message $Message -LogPath $wrapperLog } catch {}
++  switch ($Level) {
++    "Error"   { Write-Error   $Message }
++    "Warning" { Write-Warning $Message }
++    "Info"    { Write-Host    $Message }
++    "Debug"   { Write-Host    $Message }
++  }
++}
++
++# ---------------------------
++# Paths
++# ---------------------------
++$ThisScript = $MyInvocation.MyCommand.Path
++$BinDir     = Split-Path -Parent $ThisScript
++$RootDir    = Split-Path -Parent $BinDir
++$ActionsDir = Join-Path $RootDir "actions"
++
++function Assert-Environment {
++  if (-not (Test-Path -LiteralPath "D:\")) {
++    throw "D:\ drive not found. Repo policy expects logs/state on D:\. Fix drive letters or update script constants."
+   }
+-  Get-ChildItem -Path $ActionsDir -Filter "*.ps1" -File | Sort-Object Name | ForEach-Object {
+-    $_.BaseName
++  Ensure-Dir -Path $LogsRoot
++  Ensure-Dir -Path $StateRoot
++  if (-not (Test-Path -LiteralPath $ActionsDir)) {
++    throw "Actions directory not found: $ActionsDir. Did you run windows-setup\stage-aryan-setup.ps1?"
+   }
+ }
+ 
+-Ensure-Dirs
++# ---------------------------
++# Usage
++# ---------------------------
++function Show-Usage {
++@"
++setup-aryan (Windows PowerShell 5.1)
++
++Usage:
++  setup-aryan -Help
++  setup-aryan list
++  setup-aryan run <action> [-Force] [-- <action args...>]
++  setup-aryan <action> [-Force] [-- <action args...>]
++  setup-aryan version
++
++Notes:
++  - Logs:  $LogsRoot
++  - State: $StateRoot   (actions write <action>.state, key=value; NO JSON)
++  - -Force is forwarded to actions (unless already present)
++
++Examples:
++  setup-aryan list
++  setup-aryan run stage-windows-setup -Force
++  setup-aryan validate-windows-dev -- -Verbose
++"@ | Write-Host
++}
+ 
+-if ($Action -eq "list") {
+-  List-Actions
++if ($Help -or $Command -eq "help" -or $Command -eq "-h" -or $Command -eq "--help") {
++  Show-Usage
+   exit 0
+ }
+ 
+-$actionPath = Join-Path $ActionsDir ($Action + ".ps1")
+-$logPath = Join-Path $LogDir ($Action + ".log")
++# ---------------------------
++# Action discovery
++# ---------------------------
++function Get-ActionNames {
++  Assert-Environment
++  $files = Get-ChildItem -LiteralPath $ActionsDir -Filter "*.ps1" -File -ErrorAction Stop
++  $names = @()
++  foreach ($f in $files) {
++    $n = [System.IO.Path]::GetFileNameWithoutExtension($f.Name)
++    if ([string]::IsNullOrWhiteSpace($n)) { continue }
++    if ($n.StartsWith("_")) { continue }
++    $names += $n
++  }
++  return ($names | Sort-Object -Unique)
++}
++
++function Resolve-ActionPath {
++  param([Parameter(Mandatory=$true)][string]$ActionName)
++  Assert-Environment
++  $p = Join-Path $ActionsDir ($ActionName + ".ps1")
++  if (-not (Test-Path -LiteralPath $p)) { return $null }
++  return $p
++}
++
++# ---------------------------
++# Command handlers
++# ---------------------------
++function Cmd-List {
++  $names = Get-ActionNames
++  if ($names.Count -eq 0) {
++    Write-Host "No actions found in: $ActionsDir"
++    return
++  }
++  Write-Host "Actions (from $ActionsDir):"
++  foreach ($n in $names) { Write-Host ("  - {0}" -f $n) }
++}
++
++function Cmd-Version {
++  # Best-effort versioning: if a VERSION file exists in root, show it; else show file timestamp.
++  $versionFile = Join-Path $RootDir "VERSION"
++  if (Test-Path -LiteralPath $versionFile) {
++    $v = (Get-Content -LiteralPath $versionFile -ErrorAction Stop | Select-Object -First 1).Trim()
++    if ($v) { Write-Host $v; return }
++  }
++  $ts = (Get-Item -LiteralPath $ThisScript).LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
++  Write-Host ("unknown (setup-aryan.ps1 last-write: {0})" -f $ts)
++}
++
++function Invoke-Action {
++  param(
++    [Parameter(Mandatory=$true)][string]$ActionName,
++    [Parameter(Mandatory=$false)][string[]]$ActionArgs = @()
++  )
+ 
+-if (-not (Test-Path $actionPath)) {
+-  Write-Host "Unknown action: $Action"
+-  Write-Host "Try: setup-aryan list"
+-  exit 2
++  $path = Resolve-ActionPath -ActionName $ActionName
++  if ($null -eq $path) {
++    throw "Unknown action: $ActionName (not found in $ActionsDir)"
++  }
++
++  # Forward -Force if requested and not already present in args
++  $finalArgs = @()
++  if ($Force) {
++    $hasForce = $false
++    foreach ($a in $ActionArgs) {
++      if ($a -ieq "-Force") { $hasForce = $true; break }
++    }
++    if (-not $hasForce) { $finalArgs += "-Force" }
++  }
++  $finalArgs += $ActionArgs
++
++  Write-Log -Level Info -Message ("Running action: {0} {1}" -f $ActionName, ($finalArgs -join " "))
++  Write-Log -Level Debug -Message ("Action path: {0}" -f $path)
++
++  # Call the action in a new scope; pass args as-is (strings)
++  & $path @finalArgs
++  $rc = $LASTEXITCODE
++
++  if ($rc -ne 0) {
++    Write-Log -Level Error -Message ("Action failed: {0} (rc={1})" -f $ActionName, $rc)
++    exit $rc
++  }
++
++  Write-Log -Level Info -Message ("Action success: {0}" -f $ActionName)
++  exit 0
+ }
+ 
+-$header = @(
+-  Log-Line "INFO"  "setup-aryan: action=$Action user=$env:USERNAME pwd=$(Get-Location)"
+-  Log-Line "INFO"  "setup-aryan: action_path=$actionPath"
+-  Log-Line "INFO"  "setup-aryan: log_path=$logPath"
+-  ""
+-) -join "`r`n"
++# ---------------------------
++# Dispatch
++# ---------------------------
++try {
++  switch ($Command.ToLowerInvariant()) {
++    "list"    { Cmd-List; exit 0 }
++    "version" { Cmd-Version; exit 0 }
++    "run" {
++      if ([string]::IsNullOrWhiteSpace($Action)) {
++        throw "Missing action name. Usage: setup-aryan run <action> [-Force] [-- <action args...>]"
++      }
+ 
+-$header | Tee-Object -FilePath $logPath -Append | Out-Null
++      # Support `--` separator to forward remaining args cleanly.
++      # Since we already capture remaining arguments into $Rest, we just strip leading "--" if present.
++      $actionArgs = @()
++      if ($Rest.Count -gt 0) {
++        if ($Rest[0] -eq "--") { $actionArgs = $Rest[1..($Rest.Count-1)] } else { $actionArgs = $Rest }
++      }
++      Invoke-Action -ActionName $Action -ActionArgs $actionArgs
++    }
++    default {
++      # If first token is an action name, treat as action.
++      $maybeAction = $Command
++      $actionArgs = @()
++      if ($Action) { $actionArgs += $Action }
++      if ($Rest.Count -gt 0) { $actionArgs += $Rest }
+ 
+-# Run action and tee output
+-& powershell -ExecutionPolicy Bypass -File $actionPath @Args 2>&1 | Tee-Object -FilePath $logPath -Append
++      # Strip "--" if used
++      if ($actionArgs.Count -gt 0 -and $actionArgs[0] -eq "--") {
++        $actionArgs = $actionArgs[1..($actionArgs.Count-1)]
++      }
++
++      $path = Resolve-ActionPath -ActionName $maybeAction
++      if ($null -ne $path) {
++        Invoke-Action -ActionName $maybeAction -ActionArgs $actionArgs
++      } else {
++        Show-Usage
++        throw "Unknown command or action: $Command"
++      }
++    }
++  }
++} catch {
++  Write-Log -Level Error -Message $_.Exception.Message
++  exit 1
++}
+diff --git a/windows-setup/stage-aryan-setup.ps1 b/windows-setup/stage-aryan-setup.ps1
+index 96eebb3..0456943 100755
+--- a/windows-setup/stage-aryan-setup.ps1
++++ b/windows-setup/stage-aryan-setup.ps1
+@@ -1,177 +1,393 @@
+-#requires -Version 5.1
+ <#
+-stage-aryan-setup.ps1
++.SYNOPSIS
++Stages the Windows "setup-aryan" framework from this repo into C:\Tools\aryan-setup\ and prepares logging + state directories on D:\.
+ 
+-Purpose:
+-  Idempotently stage Windows "setup-aryan" framework from this repo into:
+-    - C:\Tools\aryan-setup\
+-    - D:\aryan-setup\logs\
+-    - D:\aryan-setup\state\
++.DESCRIPTION
++- Copies windows-setup\bin and windows-setup\actions into C:\Tools\aryan-setup\ (idempotent).
++- Ensures logs directory exists: D:\aryan-setup\logs\
++- Ensures state-files directory exists: D:\aryan-setup\state-files\
++- Writes a state file for this action (no JSON): D:\aryan-setup\state-files\stage-windows-setup.state
++- Creates convenience launchers in C:\Tools\aryan-setup\bin\ :
++  - setup-aryan.cmd
++  - setup-aryan-log.cmd
++- Optionally adds C:\Tools\aryan-setup\bin to USER PATH (safe + idempotent).
+ 
+-Prerequisites:
+-  - Windows 11
+-  - PowerShell 5.1+ (built-in) or PowerShell 7
+-  - Admin recommended (to create C:\Tools)
+-  - D: drive present (for logs/state as per repo policy)
++This script is compatible with Windows PowerShell 5.1.
+ 
+-Usage:
++.PREREQUISITES
++- Windows PowerShell 5.1
++- Run from the repo root (recommended) or anywhere inside the cloned repo.
++- Git recommended (optional) for version stamping.
++- Admin rights are NOT required unless your policy blocks script execution; the README suggests using:
+   powershell -ExecutionPolicy Bypass -File .\windows-setup\stage-aryan-setup.ps1
+-  powershell -ExecutionPolicy Bypass -File .\windows-setup\stage-aryan-setup.ps1 -Help
+-
+-Notes:
+-  - Safe to run multiple times (idempotent).
+-  - Adds a user profile block (idempotent) to define:
+-      setup-aryan
+-      setup-aryan-log
+-    and tab completion for action names.
++
++.PARAMETER Force
++Re-run staging even if the state-file indicates a previous success.
++
++.PARAMETER TargetRoot
++Where to stage the framework (default: C:\Tools\aryan-setup).
++
++.PARAMETER LogsRoot
++Where logs live (default: D:\aryan-setup\logs).
++
++.PARAMETER StateRoot
++Where state-files live (default: D:\aryan-setup\state-files).
++
++.PARAMETER NoPathUpdate
++Do not attempt to add the staged bin directory to the USER PATH.
++
++.PARAMETER Help
++Show help.
++
++.EXAMPLE
++powershell -ExecutionPolicy Bypass -File .\windows-setup\stage-aryan-setup.ps1
++
++.EXAMPLE
++powershell -ExecutionPolicy Bypass -File .\windows-setup\stage-aryan-setup.ps1 -Force
++
++.EXAMPLE
++powershell -ExecutionPolicy Bypass -File .\windows-setup\stage-aryan-setup.ps1 -NoPathUpdate
+ #>
+ 
++[CmdletBinding()]
+ param(
++  [Parameter(Mandatory=$false)]
++  [switch]$Force,
++
++  [Parameter(Mandatory=$false)]
++  [string]$TargetRoot = "C:\Tools\aryan-setup",
++
++  [Parameter(Mandatory=$false)]
++  [string]$LogsRoot = "D:\aryan-setup\logs",
++
++  [Parameter(Mandatory=$false)]
++  [string]$StateRoot = "D:\aryan-setup\state-files",
++
++  [Parameter(Mandatory=$false)]
++  [switch]$NoPathUpdate,
++
++  [Parameter(Mandatory=$false)]
+   [switch]$Help
+ )
+ 
+-$TZ = "India Standard Time"
++Set-StrictMode -Version 2
++$ErrorActionPreference = "Stop"
+ 
+-function Get-TimeStamp {
+-  try {
+-    $now = Get-Date
+-    $tz  = [System.TimeZoneInfo]::FindSystemTimeZoneById($TZ)
+-    $local = [System.TimeZoneInfo]::ConvertTime($now, $tz)
+-    $abbr = "IST"
+-    return "{0} {1}" -f $abbr, $local.ToString("dd-MM-yyyy HH:mm:ss")
+-  } catch {
+-    return (Get-Date).ToString("dd-MM-yyyy HH:mm:ss")
+-  }
++function Show-Help {
++  Get-Help -Detailed $MyInvocation.MyCommand.Path
+ }
+ 
+-function Log-Info($msg)  { Write-Host "$(Get-TimeStamp) INFO stage-aryan-setup: $msg" }
+-function Log-Warn($msg)  { Write-Warning "$(Get-TimeStamp) WARNING stage-aryan-setup: $msg" }
+-function Log-Err($msg)   { Write-Error "$(Get-TimeStamp) ERROR stage-aryan-setup: $msg" }
++if ($Help) { Show-Help; exit 0 }
+ 
+-function Is-Admin {
+-  $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+-  $p  = New-Object Security.Principal.WindowsPrincipal($id)
+-  return $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+-}
+-
+-if ($Help) {
+-  @"
+-stage-aryan-setup.ps1
++# ---------------------------
++# Constants / action identity
++# ---------------------------
++$ActionName = "stage-windows-setup"
++$BinDirName = "bin"
++$ActionsDirName = "actions"
++$LibDirName = "lib"
+ 
+-Usage:
+-  powershell -ExecutionPolicy Bypass -File .\windows-setup\stage-aryan-setup.ps1
++# ---------------------------
++# Utility: time + logging
++# ---------------------------
++function Get-TzOffsetString {
++  # Returns "+05:30" style string
++  $offset = [System.TimeZoneInfo]::Local.GetUtcOffset([DateTime]::Now)
++  $sign = if ($offset.TotalMinutes -ge 0) { "+" } else { "-" }
++  $hh = [Math]::Abs([int]$offset.Hours).ToString("00")
++  $mm = [Math]::Abs([int]$offset.Minutes).ToString("00")
++  return "$sign$hh`:$mm"
++}
+ 
+-Stages to:
+-  C:\Tools\aryan-setup\
+-  D:\aryan-setup\logs\
+-  D:\aryan-setup\state\
++function Get-Stamp {
++  $tz = Get-TzOffsetString
++  $dt = Get-Date
++  # "<TZ dd-mm-yyyy HH:MM:ss>"
++  return ("{0} {1}" -f $tz, $dt.ToString("dd-MM-yyyy HH:mm:ss"))
++}
+ 
+-"@ | Write-Host
+-  exit 0
++function Ensure-Dir {
++  param([Parameter(Mandatory=$true)][string]$Path)
++  if (-not (Test-Path -LiteralPath $Path)) {
++    New-Item -ItemType Directory -Path $Path -Force | Out-Null
++  }
+ }
+ 
+-$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+-$srcBin = Join-Path $repoRoot "windows-setup\bin"
+-$srcActions = Join-Path $repoRoot "windows-setup\actions"
++$null = Ensure-Dir -Path $LogsRoot
++$null = Ensure-Dir -Path $StateRoot
+ 
+-$dstRoot = "C:\Tools\aryan-setup"
+-$dstBin = Join-Path $dstRoot "bin"
+-$dstActions = Join-Path $dstRoot "actions"
++$LogPath = Join-Path $LogsRoot "$ActionName.log"
+ 
+-$logRoot = "D:\aryan-setup\logs"
+-$stateRoot = "D:\aryan-setup\state"
++function Write-Log {
++  param(
++    [Parameter(Mandatory=$true)][ValidateSet("Error","Warning","Info","Debug")][string]$Level,
++    [Parameter(Mandatory=$true)][string]$Message
++  )
++  $line = "{0} {1} {2}" -f (Get-Stamp), $Level, $Message
++  # Always append to log file
++  Add-Content -LiteralPath $LogPath -Value $line -Encoding UTF8
++  # Also emit to console
++  switch ($Level) {
++    "Error"   { Write-Error   $Message }
++    "Warning" { Write-Warning $Message }
++    "Info"    { Write-Host    $Message }
++    "Debug"   { Write-Host    $Message }
++  }
++}
+ 
+-Log-Info "Repo root: $repoRoot"
+-Log-Info "Staging to: $dstRoot"
+-Log-Info "Logs to: $logRoot"
+-Log-Info "State to: $stateRoot"
++# ---------------------------
++# Utility: state-files (.state, key=value; no JSON)
++# ---------------------------
++function Read-State {
++  param([Parameter(Mandatory=$true)][string]$StateFile)
++  if (-not (Test-Path -LiteralPath $StateFile)) { return $null }
+ 
+-if (-not (Test-Path "D:\")) {
+-  Log-Err "D: drive not found. This repo expects logs/state on D:. Create/mount D: then re-run."
+-  exit 1
++  $map = @{}
++  $lines = Get-Content -LiteralPath $StateFile -ErrorAction Stop
++  foreach ($ln in $lines) {
++    if ([string]::IsNullOrWhiteSpace($ln)) { continue }
++    if ($ln.TrimStart().StartsWith("#")) { continue }
++    $idx = $ln.IndexOf("=")
++    if ($idx -lt 1) { continue }
++    $k = $ln.Substring(0, $idx).Trim()
++    $v = $ln.Substring($idx + 1).Trim()
++    if ($k.Length -gt 0) { $map[$k] = $v }
++  }
++  return $map
+ }
+ 
+-if (-not (Is-Admin)) {
+-  Log-Warn "Not running as Admin. Creating C:\Tools may fail. Run elevated PowerShell if this fails."
+-}
++function Write-State {
++  param(
++    [Parameter(Mandatory=$true)][string]$StateFile,
++    [Parameter(Mandatory=$true)][hashtable]$Fields
++  )
+ 
+-# Ensure directories
+-New-Item -ItemType Directory -Force -Path $dstRoot, $dstBin, $dstActions | Out-Null
+-New-Item -ItemType Directory -Force -Path $logRoot, $stateRoot | Out-Null
++  $content = @()
++  $content += "action=$($Fields.action)"
++  $content += "status=$($Fields.status)"
++  $content += "rc=$($Fields.rc)"
++  $content += "started_at=$($Fields.started_at)"
++  $content += "finished_at=$($Fields.finished_at)"
++  $content += "user=$($Fields.user)"
++  $content += "host=$($Fields.host)"
++  $content += "log_path=$($Fields.log_path)"
++  $content += "version=$($Fields.version)"
+ 
+-# Copy files (idempotent overwrite)
+-if (Test-Path $srcBin) {
+-  Copy-Item -Force -Recurse -Path (Join-Path $srcBin "*") -Destination $dstBin
+-} else {
+-  Log-Warn "Missing repo folder: $srcBin"
++  # Always write atomically as best effort
++  $tmp = "$StateFile.tmp"
++  Set-Content -LiteralPath $tmp -Value $content -Encoding UTF8
++  Move-Item -LiteralPath $tmp -Destination $StateFile -Force
+ }
+ 
+-if (Test-Path $srcActions) {
+-  Copy-Item -Force -Recurse -Path (Join-Path $srcActions "*") -Destination $dstActions
+-} else {
+-  # It's ok if empty for now
+-  Log-Info "No actions folder yet (ok): $srcActions"
++function Get-ISO8601 {
++  (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssK")
+ }
+ 
+-# Profile integration (idempotent)
+-$profilePath = $PROFILE.CurrentUserAllHosts
+-$markerBegin = "# >>> aryan-setup BEGIN >>>"
+-$markerEnd   = "# <<< aryan-setup END <<<"
+-
+-$block = @"
+-$markerBegin
+-`$env:Path = "$dstBin;`$env:Path"
++function Get-RepoVersion {
++  param([Parameter(Mandatory=$true)][string]$RepoRoot)
++  # Best effort:
++  # 1) git rev-parse --short HEAD
++  # 2) fallback: "unknown"
++  try {
++    $git = Get-Command git -ErrorAction Stop
++    $hash = & $git.Source -C $RepoRoot rev-parse --short HEAD 2>$null
++    if ($LASTEXITCODE -eq 0 -and $hash) { return "git-$hash" }
++  } catch { }
++  return "unknown"
++}
+ 
+-function setup-aryan {
++# ---------------------------
++# Utility: file copy (idempotent)
++# ---------------------------
++function Copy-Tree {
+   param(
+-    [Parameter(Position=0)]
+-    [string]`$Action = "list",
+-    [Parameter(ValueFromRemainingArguments=`$true)]
+-    [string[]]`$Args
++    [Parameter(Mandatory=$true)][string]$SourceDir,
++    [Parameter(Mandatory=$true)][string]$DestDir
+   )
+-  & "$dstBin\setup-aryan.ps1" -Action `$Action -Args `$Args
++
++  if (-not (Test-Path -LiteralPath $SourceDir)) {
++    throw "Source directory not found: $SourceDir"
++  }
++
++  Ensure-Dir -Path $DestDir
++
++  # Copy recursively, overwriting files; preserves directory structure.
++  # This is idempotent: running again results in the same staged tree.
++  Copy-Item -Path (Join-Path $SourceDir "*") -Destination $DestDir -Recurse -Force -ErrorAction Stop
+ }
+ 
+-function setup-aryan-log {
++function Write-TextFileIfDifferent {
+   param(
+-    [Parameter(Position=0)]
+-    [string]`$Action = "list",
+-    [switch]`$Follow
++    [Parameter(Mandatory=$true)][string]$Path,
++    [Parameter(Mandatory=$true)][string]$Content
+   )
+-  & "$dstBin\setup-aryan-log.ps1" -Action `$Action -Follow:`$Follow
++  $needWrite = $true
++  if (Test-Path -LiteralPath $Path) {
++    try {
++      $existing = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
++      if ($existing -eq $Content) { $needWrite = $false }
++    } catch {
++      $needWrite = $true
++    }
++  }
++  if ($needWrite) {
++    $dir = Split-Path -Parent $Path
++    Ensure-Dir -Path $dir
++    Set-Content -LiteralPath $Path -Value $Content -Encoding ASCII
++  }
+ }
+ 
+-Register-ArgumentCompleter -CommandName setup-aryan -ScriptBlock {
+-  param(`$commandName, `$parameterName, `$wordToComplete, `$commandAst, `$fakeBoundParameters)
+-  `$actionsDir = "$dstActions"
+-  `$items = @("list")
+-  if (Test-Path `$actionsDir) {
+-    `$items += (Get-ChildItem -Path `$actionsDir -Filter "*.ps1" -File | ForEach-Object { `$_.BaseName })
++function Add-ToUserPath {
++  param([Parameter(Mandatory=$true)][string]$DirToAdd)
++
++  $current = [Environment]::GetEnvironmentVariable("Path","User")
++  if ([string]::IsNullOrWhiteSpace($current)) { $current = "" }
++
++  # Normalize comparisons
++  $parts = $current.Split(";") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
++  $exists = $false
++  foreach ($p in $parts) {
++    if ($p.TrimEnd("\") -ieq $DirToAdd.TrimEnd("\")) { $exists = $true; break }
+   }
+-  `$items | Where-Object { `$_ -like "`$wordToComplete*" } | ForEach-Object {
+-    [System.Management.Automation.CompletionResult]::new(`$_, `$_, 'ParameterValue', `$_)
++  if (-not $exists) {
++    $new = if ($current.Trim().EndsWith(";") -or $current.Trim().Length -eq 0) {
++      "$current$DirToAdd"
++    } else {
++      "$current;$DirToAdd"
++    }
++    [Environment]::SetEnvironmentVariable("Path","$new","User")
++    Write-Log -Level Info -Message "Added to USER PATH: $DirToAdd"
++    Write-Log -Level Info -Message "Open a new terminal for PATH changes to take effect."
++  } else {
++    Write-Log -Level Debug -Message "USER PATH already contains: $DirToAdd"
++  }
++}
++
++# ---------------------------
++# Main
++# ---------------------------
++$StartedAt = Get-ISO8601
++$UserName = [Environment]::UserName
++$HostName = $env:COMPUTERNAME
++$RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..") | Select-Object -ExpandProperty Path
++$Version = Get-RepoVersion -RepoRoot $RepoRoot
++$StateFile = Join-Path $StateRoot "$ActionName.state"
++
++Write-Log -Level Info -Message "Starting: $ActionName"
++Write-Log -Level Info -Message "RepoRoot: $RepoRoot"
++Write-Log -Level Info -Message "TargetRoot: $TargetRoot"
++Write-Log -Level Info -Message "LogsRoot: $LogsRoot"
++Write-Log -Level Info -Message "StateRoot: $StateRoot"
++Write-Log -Level Info -Message "Version: $Version"
++Write-Log -Level Info -Message "Force: $Force"
++
++# Idempotency gate based on state file
++try {
++  $prev = Read-State -StateFile $StateFile
++  if ($prev -ne $null -and -not $Force) {
++    if ($prev.ContainsKey("status") -and $prev["status"] -eq "success") {
++      Write-Log -Level Info -Message "State indicates previous success; skipping staging. Use -Force to re-run."
++      $FinishedAt = Get-ISO8601
++      Write-State -StateFile $StateFile -Fields @{
++        action      = $ActionName
++        status      = "skipped"
++        rc          = 0
++        started_at  = $StartedAt
++        finished_at = $FinishedAt
++        user        = $UserName
++        host        = $HostName
++        log_path    = $LogPath
++        version     = $Version
++      }
++      exit 0
++    }
+   }
++} catch {
++  Write-Log -Level Warning -Message "Failed to read previous state (continuing): $($_.Exception.Message)"
+ }
+-$markerEnd
++
++$rc = 0
++$status = "success"
++
++try {
++  # Ensure target dirs
++  Ensure-Dir -Path $TargetRoot
++  $stagedBin = Join-Path $TargetRoot $BinDirName
++  $stagedActions = Join-Path $TargetRoot $ActionsDirName
++  $stagedLib = Join-Path $TargetRoot $LibDirName
++
++  Ensure-Dir -Path $stagedBin
++  Ensure-Dir -Path $stagedActions
++  Ensure-Dir -Path $stagedLib
++
++  # Copy from repo/windows-setup/*
++  $srcWinSetup = Join-Path $RepoRoot "windows-setup"
++  $srcBin = Join-Path $srcWinSetup $BinDirName
++  $srcActions = Join-Path $srcWinSetup $ActionsDirName
++
++  if (Test-Path -LiteralPath $srcBin) {
++    Write-Log -Level Info -Message "Copying bin -> $stagedBin"
++    Copy-Tree -SourceDir $srcBin -DestDir $stagedBin
++  } else {
++    Write-Log -Level Warning -Message "No windows-setup\bin found at: $srcBin (continuing)"
++  }
++
++  if (Test-Path -LiteralPath $srcActions) {
++    Write-Log -Level Info -Message "Copying actions -> $stagedActions"
++    Copy-Tree -SourceDir $srcActions -DestDir $stagedActions
++  } else {
++    Write-Log -Level Warning -Message "No windows-setup\actions found at: $srcActions (continuing)"
++  }
++
++  # Create convenience CMD shims in staged bin
++  $cmdSetupAryan = @"
++@echo off
++setlocal
++powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup-aryan.ps1" %*
++endlocal
++"@
++
++  $cmdSetupAryanLog = @"
++@echo off
++setlocal
++powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup-aryan-log.ps1" %*
++endlocal
+ "@
+ 
+-# Ensure profile file exists
+-if (-not (Test-Path $profilePath)) {
+-  New-Item -ItemType File -Force -Path $profilePath | Out-Null
++  Write-Log -Level Info -Message "Ensuring CMD shims in staged bin"
++  Write-TextFileIfDifferent -Path (Join-Path $stagedBin "setup-aryan.cmd") -Content $cmdSetupAryan
++  Write-TextFileIfDifferent -Path (Join-Path $stagedBin "setup-aryan-log.cmd") -Content $cmdSetupAryanLog
++
++  # Optionally add staged bin to USER PATH
++  if (-not $NoPathUpdate) {
++    Add-ToUserPath -DirToAdd $stagedBin
++  } else {
++    Write-Log -Level Info -Message "NoPathUpdate set; skipping PATH modification."
++  }
++
++  Write-Log -Level Info -Message "Staging complete."
++  Write-Log -Level Info -Message "Try: setup-aryan list"
++} catch {
++  $rc = 1
++  $status = "failed"
++  Write-Log -Level Error -Message "Staging failed: $($_.Exception.Message)"
+ }
+ 
+-$profileText = Get-Content -Raw -Path $profilePath
+-
+-if ($profileText -match [regex]::Escape($markerBegin)) {
+-  # Replace existing block
+-  $pattern = [regex]::Escape($markerBegin) + "(.|\r|\n)*?" + [regex]::Escape($markerEnd)
+-  $profileText = [regex]::Replace($profileText, $pattern, $block)
+-  Set-Content -Path $profilePath -Value $profileText -Encoding UTF8
+-  Log-Info "Updated existing profile block: $profilePath"
+-} else {
+-  Add-Content -Path $profilePath -Value "`r`n$block`r`n" -Encoding UTF8
+-  Log-Info "Added profile block: $profilePath"
++$FinishedAt = Get-ISO8601
++try {
++  Write-State -StateFile $StateFile -Fields @{
++    action      = $ActionName
++    status      = $status
++    rc          = $rc
++    started_at  = $StartedAt
++    finished_at = $FinishedAt
++    user        = $UserName
++    host        = $HostName
++    log_path    = $LogPath
++    version     = $Version
++  }
++} catch {
++  Write-Log -Level Warning -Message "Failed to write state file: $($_.Exception.Message)"
+ }
+ 
+-Log-Info "Staging complete."
+-Log-Info "Open a new PowerShell and run: setup-aryan list"
++exit $rc

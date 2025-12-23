@@ -37,6 +37,12 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# Defensive: if -Force accidentally bound into DevRoot (wrapper/args issue), normalize.
+if ($DevRoot -like "-*") {
+  $Force = $true
+  $DevRoot = "D:\dev"
+}
+
 $ActionName = "install-java-windows"
 $Version    = "1.1.0"
 
@@ -145,6 +151,35 @@ function Add-ToUserPath {
   Write-Log Info "Open a new terminal for PATH changes to take effect."
 }
 
+function Set-Tls12 {
+  try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
+}
+
+function Download-File {
+  param(
+    [Parameter(Mandatory=$true)][string]$Url,
+    [Parameter(Mandatory=$true)][string]$OutFile
+  )
+
+  Set-Tls12
+
+  try {
+    Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
+    return
+  } catch {
+    Write-Log Warning "Invoke-WebRequest failed: $($_.Exception.Message)"
+  }
+
+  $curl = Join-Path $env:SystemRoot "System32\curl.exe"
+  if (Test-Path -LiteralPath $curl) {
+    $p = Start-Process -FilePath $curl -ArgumentList @("-L", $Url, "-o", $OutFile) -NoNewWindow -Wait -PassThru
+    if ($p.ExitCode -ne 0) { throw "curl.exe failed with exit code: $($p.ExitCode)" }
+    return
+  }
+
+  throw "Download failed and curl.exe not available."
+}
+
 function Test-Java21Present {
   param([Parameter(Mandatory=$true)][string]$JavaExe)
   if (-not (Test-Path -LiteralPath $JavaExe)) { return $false }
@@ -162,6 +197,17 @@ function Remove-IfExists {
   if (Test-Path -LiteralPath $Path) {
     Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
   }
+}
+
+function Unblock-Tree {
+  param([Parameter(Mandatory=$true)][string]$Path)
+  try {
+    if (Test-Path -LiteralPath $Path) {
+      Get-ChildItem -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
+        try { Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue } catch { }
+      }
+    }
+  } catch { }
 }
 
 # ---------------------------
@@ -210,19 +256,21 @@ try {
     Ensure-Dir -Path $tmp
 
     $zipPath = Join-Path $tmp "temurin-jdk21.zip"
+    if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue }
 
     $uri = "https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/jdk/hotspot/normal/eclipse?project=jdk"
 
     Write-Log Info "Downloading Temurin JDK 21 ZIP..."
-    Invoke-WebRequest -Uri $uri -OutFile $zipPath -UseBasicParsing
+    Download-File -Url $uri -OutFile $zipPath
+    try { Unblock-File -LiteralPath $zipPath -ErrorAction SilentlyContinue } catch { }
 
     $extract = Join-Path $tmp "extract"
     Remove-IfExists -Path $extract
     Ensure-Dir -Path $extract
 
     Write-Log Info "Extracting..."
-    try { Unblock-File -LiteralPath $zipPath -ErrorAction SilentlyContinue } catch { }
     Expand-Archive -LiteralPath $zipPath -DestinationPath $extract -Force
+    Unblock-Tree -Path $extract
 
     $candidates = Get-ChildItem -LiteralPath $extract -Directory -ErrorAction Stop
     $picked = $null
@@ -239,12 +287,21 @@ try {
     Ensure-Dir -Path $staging
 
     Copy-Item -Path (Join-Path $picked "*") -Destination $staging -Recurse -Force
+    Unblock-Tree -Path $staging
 
     Remove-IfExists -Path $currentRoot
     Move-Item -LiteralPath $staging -Destination $currentRoot -Force
 
+    if (-not (Test-Path -LiteralPath $javaExe)) {
+      throw "JDK extraction completed but java.exe not found at: $javaExe"
+    }
+
     if (-not (Test-Java21Present -JavaExe $javaExe)) {
-      throw "JDK install completed but Java 21 validation failed at: $javaExe"
+      # One more unblock attempt in-place in case the move reintroduced MOTW inheritance.
+      Unblock-Tree -Path $currentRoot
+      if (-not (Test-Java21Present -JavaExe $javaExe)) {
+        throw "JDK install completed but Java 21 validation failed at: $javaExe"
+      }
     }
 
     Write-Log Info "Installed Temurin JDK 21 at: $currentRoot"

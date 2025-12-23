@@ -30,7 +30,7 @@ Notes (TODO #1: toolchain reliability)
 
 #>
 
-[CmdletBinding(PositionalBinding=$false)]
+[CmdletBinding()]
 param(
   [Parameter(Mandatory=$false)]
   [switch]$Force,
@@ -45,27 +45,11 @@ param(
   [string]$UvDir = "D:\dev\tools\uv",
 
   [Parameter(Mandatory=$false)]
-  [switch]$Help,
-
-  [Parameter(ValueFromRemainingArguments=$true)]
-  [string[]]$ExtraArgs
+  [switch]$Help
 )
 
 Set-StrictMode -Version 2
 $ErrorActionPreference = "Stop"
-
-# Accept common GNU-style flags without breaking positional args
-if ($ExtraArgs) {
-  foreach ($a in $ExtraArgs) {
-    switch -Regex ($a) {
-      '^--force$' { $Force = $true; continue }
-      '^--Force$' { $Force = $true; continue }
-      '^--help$'  { $Help = $true; continue }
-      '^--Help$'  { $Help = $true; continue }
-      default     { throw "Unknown argument: $a. Use -Help." }
-    }
-  }
-}
 
 # ---------------------------
 # Identity / dirs
@@ -98,7 +82,7 @@ function Write-Log {
   $line = "$(Get-ISTStamp) $Level $Message"
   Add-Content -LiteralPath $LogFile -Value $line -Encoding UTF8
   switch ($Level) {
-    "Error"   { Write-Error   -Message $Message -ErrorAction Continue }
+    "Error"   { Write-Error   $Message -ErrorAction Continue }
     "Warning" { Write-Warning $Message }
     "Info"    { Write-Host    $Message }
     "Debug"   { Write-Host    $Message }
@@ -165,16 +149,18 @@ function Add-ToUserPath {
   [Environment]::SetEnvironmentVariable("Path","$new","User")
 }
 
-function Invoke-Download {
+function Set-Tls12 {
+  try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
+}
+
+function Download-File {
   param(
     [Parameter(Mandatory=$true)][string]$Url,
     [Parameter(Mandatory=$true)][string]$OutFile
   )
 
+  Set-Tls12
   Write-Log Info "Downloading: $Url"
-
-  # Ensure TLS 1.2 for modern HTTPS endpoints in PS 5.1
-  try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
 
   try {
     Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
@@ -205,11 +191,9 @@ function Ensure-Miniconda {
   $installer = Join-Path $env:TEMP "Miniconda3-latest-Windows-x86_64.exe"
   if (Test-Path -LiteralPath $installer) { Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue }
 
-  # Official Miniconda distribution URL
-  Invoke-Download -Url "https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe" -OutFile $installer
+  Download-File -Url "https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe" -OutFile $installer
 
   Write-Log Info "Installing Miniconda to: $CondaPrefix"
-  # /D must be last and unquoted; ensure no trailing backslash issues
   $args = @(
     "/InstallationType=JustMe",
     "/AddToPath=0",
@@ -244,7 +228,6 @@ function Ensure-CondaConfig {
   & $CondaExePath config --set auto_activate_base false | Out-Null
   & $CondaExePath config --set changeps1 false | Out-Null
 
-  # conda expects list; use --add (idempotent-ish: it won't add duplicates)
   & $CondaExePath config --add pkgs_dirs $pkgs | Out-Null
   & $CondaExePath config --add envs_dirs $envs | Out-Null
 
@@ -284,6 +267,7 @@ function Ensure-CondaHookInProfile {
   $condaExe = Join-Path $CondaPrefix "Scripts\conda.exe"
   $uvPath   = $UvDir
 
+  # IMPORTANT: escape `$env:Path` and `$_` so they don't expand while writing the profile.
   $block = @"
 $begin
 # Conda PowerShell hook (idempotent). Required for reliable `conda activate` in PS 5.1.
@@ -293,8 +277,8 @@ if (Test-Path -LiteralPath "$condaExe") {
 
 # Ensure uv is reachable (installed by setup-aryan)
 if (Test-Path -LiteralPath "$uvPath") {
-  if (-not ($env:Path -split ';' | Where-Object { $_ -ieq "$uvPath" })) {
-    $env:Path = "$uvPath;$env:Path"
+  if (-not (`$env:Path -split ';' | Where-Object { `$_ -ieq "$uvPath" })) {
+    `$env:Path = "$uvPath;`$env:Path"
   }
 }
 $end
@@ -316,18 +300,25 @@ function Ensure-Uv {
   $zip = Join-Path $env:TEMP "uv-x86_64-pc-windows-msvc.zip"
   if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue }
 
-  Invoke-Download -Url "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip" -OutFile $zip
+  Download-File -Url "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip" -OutFile $zip
 
   Write-Log Info "Extracting uv to: $UvDir"
   Add-Type -AssemblyName System.IO.Compression.FileSystem
-  [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $UvDir)
+
+  try {
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $UvDir)
+  } catch {
+    # If partial extraction happened, try again with overwrite semantics by extracting to temp and copying.
+    $tmp = Join-Path $env:TEMP "uv-extract"
+    if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+    Ensure-Dir -Path $tmp
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $tmp)
+    Copy-Item -Path (Join-Path $tmp "*") -Destination $UvDir -Recurse -Force
+  }
 
   if (-not (Test-Path -LiteralPath $uvExe)) {
-    # Some zips extract into a subfolder; search for uv.exe and move it up.
     $found = Get-ChildItem -LiteralPath $UvDir -Recurse -Filter "uv.exe" -File -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($found) {
-      Copy-Item -LiteralPath $found.FullName -Destination $uvExe -Force
-    }
+    if ($found) { Copy-Item -LiteralPath $found.FullName -Destination $uvExe -Force }
   }
 
   if (-not (Test-Path -LiteralPath $uvExe)) {
@@ -380,7 +371,6 @@ $rc = 0
 $status = "success"
 
 try {
-  # Minimal D:\dev structure
   Ensure-Dir -Path $DevRoot
   Ensure-Dir -Path (Join-Path $DevRoot "tools")
   Ensure-Dir -Path (Join-Path $DevRoot "cache")
@@ -391,18 +381,15 @@ try {
 
   $uvExe = Ensure-Uv
 
-  # Pin caches to D:\dev\cache
   Ensure-UserEnvVar -Name "UV_CACHE_DIR" -Value (Join-Path $DevRoot "cache\uv")
   Ensure-Dir -Path (Join-Path $DevRoot "cache\uv")
 
-  # Ensure tools are on PATH for new terminals
   Add-ToUserPath -DirToAdd (Join-Path $CondaPrefix "Scripts")
   Add-ToUserPath -DirToAdd (Join-Path $CondaPrefix "condabin")
   Add-ToUserPath -DirToAdd $UvDir
 
   Ensure-CondaHookInProfile
 
-  # Verification (best-effort)
   Write-Log Info "Verification checks"
   & $condaExe --version | Out-Null
   & $uvExe --version | Out-Null

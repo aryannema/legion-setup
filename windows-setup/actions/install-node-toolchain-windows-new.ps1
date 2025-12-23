@@ -50,6 +50,12 @@ param(
 Set-StrictMode -Version 2
 $ErrorActionPreference = "Stop"
 
+# Defensive: if -Force accidentally bound into DevRoot (wrapper/args issue), normalize.
+if ($DevRoot -like "-*") {
+  $Force = $true
+  $DevRoot = "D:\dev"
+}
+
 $ActionName = "install-node-toolchain-windows"
 $Version    = "1.1.1"
 
@@ -215,7 +221,11 @@ function Ensure-NvmWindows {
 
   Ensure-Dir -Path $nvmRoot
   Ensure-Dir -Path $nvmHome
-  Ensure-Dir -Path $nodeLink
+
+  # IMPORTANT:
+  # Do NOT create $nodeLink as a normal folder.
+  # nvm-windows expects NVM_SYMLINK to be a junction/symlink it can create/replace.
+  Ensure-Dir -Path (Split-Path -Parent $nodeLink)
 
   Ensure-UserEnvVar -Name "NVM_HOME" -Value $nvmHome
   Ensure-UserEnvVar -Name "NVM_SYMLINK" -Value $nodeLink
@@ -228,7 +238,6 @@ function Ensure-NvmWindows {
   if (-not ($env:Path -split ';' | Where-Object { $_ -ieq $nvmHome }))  { $env:Path = "$nvmHome;$env:Path" }
   if (-not ($env:Path -split ';' | Where-Object { $_ -ieq $nodeLink })) { $env:Path = "$nodeLink;$env:Path" }
 
-  if ((Get-Command nvm -ErrorAction SilentlyContinue) -and -not $ForceInstall) { return $nvmExe }
   if ((Test-Path -LiteralPath $nvmExe) -and -not $ForceInstall) { return $nvmExe }
 
   Write-Log Info "Installing nvm-windows (no-install) into: $nvmHome"
@@ -304,34 +313,80 @@ function Ensure-Node {
 
   $nvmExe = Ensure-NvmWindows
 
+  $nodeLink = $env:NVM_SYMLINK
+  if ([string]::IsNullOrWhiteSpace($nodeLink)) { $nodeLink = (Join-Path $DevRoot "tools\nodejs") }
+
+  # If nodeLink exists as a normal directory, nvm cannot create the junction. Remove only if empty.
+  if (Test-Path -LiteralPath $nodeLink) {
+    $item = Get-Item -LiteralPath $nodeLink -ErrorAction SilentlyContinue
+    $isReparse = $false
+    if ($item -ne $null) {
+      try { $isReparse = (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) } catch { $isReparse = $false }
+    }
+    if (-not $isReparse) {
+      $children = @(Get-ChildItem -LiteralPath $nodeLink -Force -ErrorAction SilentlyContinue)
+      if ($children.Count -eq 0) {
+        Write-Log Warning "NVM_SYMLINK exists as a normal empty folder. Removing so nvm-windows can create a junction: $nodeLink"
+        Remove-Item -LiteralPath $nodeLink -Force -Recurse -ErrorAction Stop
+      } else {
+        Write-Log Warning "NVM_SYMLINK exists as a normal folder with contents. nvm-windows may be blocked from creating a junction at: $nodeLink"
+      }
+    }
+  }
+
   Write-Log Info "Installing Node.js LTS via nvm-windows..."
   & $nvmExe install lts | Out-Null
   & $nvmExe use lts | Out-Null
 
-  $nodeLink = $env:NVM_SYMLINK
-  if ([string]::IsNullOrWhiteSpace($nodeLink)) { $nodeLink = (Join-Path $DevRoot "tools\nodejs") }
-  $nodeExe = Join-Path $nodeLink "node.exe"
-
   # Ensure current session can resolve node if link exists
   if (-not ($env:Path -split ';' | Where-Object { $_ -ieq $nodeLink })) { $env:Path = "$nodeLink;$env:Path" }
 
+  $nodeExe = Join-Path $nodeLink "node.exe"
   if (Test-Path -LiteralPath $nodeExe) {
-    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+    if (Get-Command node -ErrorAction SilentlyContinue) {
+      Write-Log Info "Node ready: $((& node -v) 2>$null)"
+    } else {
       $ver = (& $nodeExe -v) 2>$null
-      if ($ver) {
-        Write-Log Warning "node.exe exists but PowerShell could not resolve 'node' in this session. Continuing with direct path."
-        Write-Log Info "Node ready: $ver"
-        return
-      }
-      throw "node.exe exists at $nodeExe but could not be executed. Check antivirus/MOTW and re-run with -Force."
+      Write-Log Warning "node.exe exists but PowerShell could not resolve 'node' in this session. Continuing with direct path."
+      Write-Log Info "Node ready: $ver"
     }
-
-    Write-Log Info "Node ready: $((& node -v) 2>$null)"
     return
   }
 
+  # Fallback: junction blocked. Use the installed vX.Y.Z directory directly.
+  $nvmHome = $env:NVM_HOME
+  if ([string]::IsNullOrWhiteSpace($nvmHome)) { $nvmHome = (Join-Path $DevRoot "tools\nvm-windows\current") }
+
   $nvmCurrent = ""
-  try { $nvmCurrent = (& $nvmExe current) 2>$null } catch { }
+  try { $nvmCurrent = (& $nvmExe current) 2>$null } catch { $nvmCurrent = "" }
+  $nvmCurrent = ($nvmCurrent | Out-String).Trim()
+
+  $directDir = $null
+  if ($nvmCurrent -match '(\d+\.\d+\.\d+)') {
+    $ver = $matches[1]
+    $candidate = Join-Path $nvmHome ("v{0}" -f $ver)
+    if (Test-Path -LiteralPath (Join-Path $candidate "node.exe")) { $directDir = $candidate }
+  }
+
+  if (-not $directDir) {
+    # Best-effort pick: newest v* directory with node.exe
+    $dirs = Get-ChildItem -LiteralPath $nvmHome -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "v*" }
+    foreach ($d in ($dirs | Sort-Object Name -Descending)) {
+      if (Test-Path -LiteralPath (Join-Path $d.FullName "node.exe")) { $directDir = $d.FullName; break }
+    }
+  }
+
+  if ($directDir) {
+    Write-Log Warning "nvm configured Node but junction at NVM_SYMLINK was not created. Using direct node directory on PATH: $directDir"
+    Ensure-UserEnvVar -Name "SETUP_ARYAN_NODE_DIR" -Value $directDir
+    Add-ToUserPath -DirToAdd $directDir
+    if (-not ($env:Path -split ';' | Where-Object { $_ -ieq $directDir })) { $env:Path = "$directDir;$env:Path" }
+
+    $ver2 = (& (Join-Path $directDir "node.exe") -v) 2>$null
+    Write-Log Info "Node ready (direct): $ver2"
+    Write-Log Warning "To make nvm-windows fully functional, enable Windows Developer Mode (or ensure junction creation is allowed) so NVM_SYMLINK can be created."
+    return
+  }
 
   throw "nvm reported success but '$nodeExe' does not exist (nvm current=$nvmCurrent). This usually means Windows blocked creating the node symlink/junction. Run an elevated terminal OR enable Windows Developer Mode, then run: nvm use lts and re-run this action."
 }

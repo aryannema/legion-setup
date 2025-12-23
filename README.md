@@ -304,8 +304,8 @@ Tuning:
 * Daily: 4–6GB
 * Heavy tasks: 8–10GB temporarily → then reduce again
 ---
-##5.2 WSL 2 Optimization, Migration, and Physical Disk Mounting
-###5.2.1 Global Configuration (.wslconfig)
+## 5.2) WSL 2 Optimization, Migration, and Physical Disk Mounting
+### 5.2.1) Global Configuration (.wslconfig)
 To configure resource limits globally for all WSL 2 distributions, the .wslconfig file must be placed in the Windows User Profile directory.
 Path: `%UserProfile%\.wslconfig` (e.g., `C:\Users\<YourName>\.wslconfig`)
 Application: Run `wsl --shutdown` in PowerShell to apply changes.
@@ -333,7 +333,7 @@ Get-ChildItem -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss" |
     Select-Object DistributionName, BasePath
 ```
 
-###5.2.3 Verifying Distribution and OS Version
+### 5.2.3) Verifying Distribution and OS Version
 To inspect the internal Linux OS version (e.g., Ubuntu 22.04) without an interactive login:
 ```powershell
 # Check WSL Architecture version
@@ -343,7 +343,7 @@ wsl -l -v
 wsl -d Ubuntu cat /etc/os-release
 ```
 
-###5.2.4 Mounting Physical Dual-Boot NVMe Disks
+### 5.2.4) Mounting Physical Dual-Boot NVMe Disks
 To access a physical Linux installation from a separate NVMe drive within WSL 2, we first identified the correct disk using partition GUIDs.
 Disk Analysis Output:
 ```text
@@ -367,13 +367,13 @@ wsl --mount \\.\PHYSICALDRIVE1 --partition 4
 wsl --unmount \\.\PHYSICALDRIVE1
 ```
 
-###5.2.5 Post-Migration Cleanup
+### 5.2.5) Post-Migration Cleanup
 After verifying that the D: drive installation is running and the data is accessible, the temporary backup was removed:
 ```powershell
 Remove-Item -Path D:\WSL\backup -Recurse -Force
 ```
 
-### 5.3 Move Docker Desktop storage to D:
+### 5.3) Move Docker Desktop storage to D:
 
 Docker Desktop → Settings → Resources → Advanced
 

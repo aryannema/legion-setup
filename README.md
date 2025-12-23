@@ -71,7 +71,11 @@ This repo’s `setup-aryan` actions must follow these invariants so you can safe
 - Run in an **elevated** PowerShell (Administrator) when an action requires admin rights.
 - `git` installed (to clone/update repo).
 - Execution policy must allow running the staging script (staging command below uses `-ExecutionPolicy Bypass`).
-
+> before running **Powershell** script open `powershell` once and run following 
+```PowerShell
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+```
+= then you can close it and test staging and running `setup-aryan list` 
 **Linux (Ubuntu 24.04.x)**
 - `bash`, `sudo`, `git` installed.
 - You should be able to run `sudo` and write to `/usr/local/` and `/var/log/`.

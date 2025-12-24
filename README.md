@@ -1,54 +1,210 @@
 # legion-setup
 
-# Legion Pro 7i (Gen 10, 2025) Dual-Boot AI Workstation Playbook **Windows 11 Home + Ubuntu 24.04.x | Secure Boot ON | Dynamic Graphics | Clean storage | Battery/RAM optimized | RTX for AI** > Cut-paste-ready, end-to-end playbook.
+# Legion Pro 7i (Gen 10, 2025) Dual-Boot AI Workstation Playbook **Windows 11 Home + Ubuntu 24.04.x | Secure Boot ON | Dynamic Graphics | Clean storage | Battery/RAM optimized | RTX for AI**
+
 > Includes: **Ventoy (Secure Boot)**, **Windows + WSL + Docker on D:**, **Linux /home dev universe**, **multi-Java + multi-Node + Miniconda**, **Android Studio**, **VS Code**, **Chrome profile/cache placement + iGPU targeting**, **shared NTFS data lake**, **root partition growth control**, **HWE kernel + GA fallback kernel + GRUB menu**, **snap removal (clean) + DEB restore**, and **Legion control stack (fans/power/keyboard)**.
+
 ---
+
 ## 0A) Repo automation scripts (setup-aryan) — staging + recovery (Windows/Linux kept separate)
+
 This repo now includes **OS-specific setup frameworks** you can stage onto the system so you can re-run fixes anytime (even after breakage).
 
-### Repo layout (added)
+### Windows (KISS, CMD/BAT-only) — preferred workflow (added)
+
+> **Correction note (Windows):** The PowerShell `setup-aryan` framework is now **legacy on Windows** and has been moved under:
+>
+> - `windows-setup-legacy\` _(PowerShell-only, historical reference, do not use for Windows going forward)_
+>
+> For Windows, use **manual installs + tiny batch helpers** only:
+>
+> - **No PowerShell automation**
+> - **No `-Force`**
+> - **No state management**
+> - **No profile editing**
+>
+> The PowerShell content below is preserved for history/troubleshooting notes, but **do not follow it for Windows going forward**.
+
+#### Where to install the batch helpers (updated)
+
+1. From this repo, take the Windows batch helpers from your repo folder (example layout):
+
+   - `windows-bat\bin\`
+
+   _(If you renamed the folder, the key rule is: copy the `.bat` files into `C:\setup-aryan\bin\` as shown below.)_
+
+2. Copy them into your machine at:
+
+   - `C:\setup-aryan\bin\`
+
+Your final on-disk layout should look like:
+
+```text
+C:\setup-aryan\bin\devdirs-create.bat
+C:\setup-aryan\bin\devdirs-validate.bat
+C:\setup-aryan\bin\environment-variables-validate.bat
+C:\setup-aryan\bin\validate-windows-dev.bat
+
+C:\setup-aryan\bin\new-python-project.bat
+C:\setup-aryan\bin\new-node-project.bat
+C:\setup-aryan\bin\new-java-project.bat
+```
+
+3. Add to **User PATH**:
+
+- `C:\setup-aryan\bin`
+
+Open a new **Command Prompt** and verify:
+
+```bat
+where devdirs-create
+where devdirs-validate
+where environment-variables-validate
+where validate-windows-dev
+
+where new-python-project
+where new-node-project
+where new-java-project
+```
+
+#### One-time Windows setup sequence (updated)
+
+**Step 1 — create the standard `D:\dev\...` layout (safe if already exists):**
+
+```bat
+devdirs-create
+```
+
+**Step 2 — set environment variables (Windows GUI, one-time):**
+
+Open:
+
+- Start → search **Environment Variables** → “Edit the system environment variables” → “Environment Variables…”
+
+Set these **User variables** (recommended, keep caches off C:):
+
+**Java caches (D: only)**
+
+- `GRADLE_USER_HOME = D:\dev\cache\gradle`
+- `IVY_USER_DIR      = D:\dev\cache\ivy`
+
+**Node caches (D: only)**
+
+- `NPM_CONFIG_CACHE  = D:\dev\cache\npm`
+- `PNPM_HOME         = D:\dev\tools\pnpm` _(and add `%PNPM_HOME%` to PATH if you use pnpm via corepack/npm)_
+- _(Optional)_ set pnpm store to D via pnpm config later
+
+**Python caches (D: only)**
+
+- `UV_CACHE_DIR      = D:\dev\cache\uv`
+- `PIP_CACHE_DIR     = D:\dev\cache\pip`
+
+**Optional (recommended): TEMP/TMP to D**
+
+- `TEMP = D:\dev\tmp`
+- `TMP  = D:\dev\tmp`
+
+Close terminals and open a new CMD after setting these.
+
+**Step 3 — validate folders + env vars + tool presence (repeatable):**
+
+Option A (quick folder-only check):
+
+```bat
+devdirs-validate
+```
+
+Option B (environment variables + binaries + caches check):
+
+```bat
+environment-variables-validate
+```
+
+Option C (one-shot full Windows dev audit: dirs + tool presence + versions):
+
+```bat
+validate-windows-dev
+```
+
+**Step 4 — create project scaffolds (repeatable):**
+
+Python:
+
+```bat
+new-python-project --name MyApp
+new-python-project --name MyApp --ai
+new-python-project --name MyApp --ai --tf
+```
+
+Node (minimal; no template suggestions inside the generator):
+
+```bat
+new-node-project --name MyNodeApp
+new-node-project --name MyNodeApp --ai
+new-node-project --name MyNodeApp --tf
+```
+
+Java (plain JDK scaffold; no Maven/Gradle enforced):
+
+```bat
+new-java-project --name MyJavaApp
+new-java-project --name MyJavaApp --ai
+new-java-project --name MyJavaApp --tf
+```
+
+Flags:
+
+- `--ai` adds AI/ML-friendly notes/deps where it makes sense (Python adds common DS deps).
+- `--tf` is a dedicated TensorFlow flag:
+
+  - Python: adds TensorFlow deps + a TF validation helper and TF warmup notes.
+  - Node/Java: **does not** install TensorFlow; it adds **README guidance** recommending better alternatives (Python service / ONNX / DJL), plus iGPU-first UI notes.
+
+### Repo layout (updated)
+
 - `linux-setup/`
+
   - `stage-aryan-setup.sh` → stages Linux commands into: `/usr/local/aryan-setup/`
   - `bin/` → wrapper commands (`setup-aryan`, `setup-aryan-log`)
   - `actions/` → runnable actions (ex: `recover-linux-gui-igpu-deb`, `validate-linux-gpu`)
   - `completions/` → bash completion for `setup-aryan`
-- `windows-setup/`
-  - `stage-aryan-setup.ps1` → stages Windows commands into: `C:\Tools\aryan-setup\`
-  - `bin/` → wrapper commands (`setup-aryan.ps1`, `setup-aryan-log.ps1`)
-  - `actions/` → future Windows actions go here
+
+- `windows-setup-legacy/` _(legacy PowerShell history only — do not use on Windows going forward)_
+
+  - Old staging + wrapper scripts, preserved for reference only.
+
+- `windows-bat/` _(current Windows approach — tiny BAT helpers)_
+
+  - `bin/` → the `.bat` project + validation helpers you copy to `C:\setup-aryan\bin`
 
 ### Linux staging target (added)
+
 - Binaries/scripts: `/usr/local/aryan-setup/`
 - Wrapper commands (symlinked): `/usr/local/bin/setup-aryan`, `/usr/local/bin/setup-aryan-log`
 - Logs: `/var/log/setup-aryan/`
 - State: `/var/log/setup-aryan/state-files/`
 
-### Windows staging target (added)
-- Binaries/scripts: `C:\Tools\aryan-setup\`
-- Logs: `D:\aryan-setup\logs\`
-- State: `D:\aryan-setup\state\`
+> Windows does not use staging or state-files anymore (Windows is BAT-only KISS).
+> The state-files contract below remains relevant only for Linux.
 
-> **Correction note (state-files standard, do not ignore):**
-> - Windows state directory is **`D:\aryan-setup\state-files\`** (real directory, no symlinks).
-> - Linux state directory remains **`/var/log/setup-aryan/state-files/`** (real directory, no symlinks).
-> - State management uses **no JSON** anywhere. Each action writes **`<action>.state`** (INI-style `key=value`, UTF-8).
+### Standardized automation contract (Linux only)
 
-### Standardized automation contract (added)
-This repo’s `setup-aryan` actions must follow these invariants so you can safely re-run them during debugging and recovery:
+This repo’s Linux `setup-aryan` actions must follow these invariants so you can safely re-run them during debugging and recovery:
 
-**1) Shell + PowerShell version consistency**
+**1) Shell consistency**
+
 - Linux: **bash** (POSIX-ish bash scripts)
-- Windows: **Windows PowerShell 5.1** (no PS7-only features required)
 
 **2) Logs**
+
 - Linux logs: `/var/log/setup-aryan/`
-- Windows logs: `D:\aryan-setup\logs\`
 - Log line format (exact): `<TZ dd-mm-yyyy HH:MM:ss> <Error|Warning|Info|Debug> <message>`
 
 **3) State-files (no JSON, no symlinks)**
+
 - Linux state dir: `/var/log/setup-aryan/state-files/` (real directory)
-- Windows state dir: `D:\aryan-setup\state-files\` (real directory)
 - Each action writes: `<action>.state` with the fields below (as `key=value`):
+
   - `action`
   - `status` (`success|failed|skipped`)
   - `rc`
@@ -59,82 +215,51 @@ This repo’s `setup-aryan` actions must follow these invariants so you can safe
   - `log_path`
   - `version`
 
-**4) Idempotency + force semantics**
-- Default: if `<action>.state` exists and `status=success`, the action should **skip** safely.
-- Force:
-  - Linux actions must support: `--force`
-  - Windows actions must support: `-Force`
-  - Force means: **re-run** the action even if it previously succeeded, and then overwrite/update the action’s `.state`.
+**4) Idempotency + force semantics (Linux)**
 
-### Prerequisites (before staging or running any actions) (added)
-**Windows (PowerShell 5.1)**
-- Run in an **elevated** PowerShell (Administrator) when an action requires admin rights.
-- `git` installed (to clone/update repo).
-- Execution policy must allow running the staging script (staging command below uses `-ExecutionPolicy Bypass`).
-> before running **Powershell** script open `powershell` once and run following 
-```PowerShell
-Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
-```
-= then you can close it and test staging and running `setup-aryan list` 
+- Default: if `<action>.state` exists and `status=success`, the action should **skip** safely.
+- Force: Linux actions must support: `--force`
+
+### Prerequisites (before staging or running any actions) (updated)
+
+**Windows**
+
+- Windows uses manual installs + BAT helpers only.
+- No PowerShell execution policy steps are required for Windows going forward.
+
 **Linux (Ubuntu 24.04.x)**
+
 - `bash`, `sudo`, `git` installed.
 - You should be able to run `sudo` and write to `/usr/local/` and `/var/log/`.
 
-### Repo TODOs to incorporate (tracked work) (added)
+### Repo TODOs to incorporate (tracked work) (kept)
+
 - **TODO #1** Fix Python toolchain workflow (Linux + Windows, uv+conda, PATH/activation, VS Code reliability)
 - **TODO #2** Notebook hang / runaway VRAM investigation + validation
 - **TODO #3** Add TensorFlow flag separate from AI/ML + TF JIT/first-run optimization + validation
 - **TODO #4** Explain/validate Xorg showing in `nvidia-smi`, keep GUI iGPU-first (PRIME on-demand)
 
-### Staging commands (added)
+### Staging commands (Linux only)
+
 **Linux (run from repo root):**
+
 ```bash
 sudo bash ./linux-setup/stage-aryan-setup.sh
-````
-
-**Windows (run from repo root in an elevated PowerShell):**
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\windows-setup\stage-aryan-setup.ps1
 ```
 
-After staging:
+_(Windows PowerShell staging is legacy and now lives in `windows-setup-legacy/` only.)_
 
-* Linux: `setup-aryan list`, `setup-aryan recover-linux-gui-igpu-deb`, `setup-aryan validate-linux-gpu`
-* Windows: `setup-aryan list` (more actions can be added under `windows-setup/actions/`)
+### How to use the staged scripts (Linux only)
 
-### How to use the staged scripts (added)
+This is the day-to-day workflow once Linux staging is done: you **list** actions, **run** the one you need, and use **logs + state-files** to confirm what happened.
 
-This is the day-to-day workflow once staging is done: you **list** actions, **run** the one you need, and use **logs + state-files** to confirm what happened.
-
-#### A) Find what actions exist
-
-**Linux:**
+#### A) Find what actions exist (Linux)
 
 ```bash
 setup-aryan list
 ```
 
-**Windows (PowerShell 5.1):**
-
-```powershell
-setup-aryan list
-```
-
-If `setup-aryan` isn’t found right after staging:
-
-* **Linux:** open a new terminal (or run `hash -r`), then retry `setup-aryan list`.
-* **Windows:** open a new PowerShell window, then retry. If you still want to run it explicitly by path, use:
-
-  ```powershell
-  & "C:\Tools\aryan-setup\bin\setup-aryan.ps1" list
-  ```
-
-#### B) Run an action (normal vs force)
-
-**Normal run**: if the action already succeeded before, it should skip (idempotent behavior).
-
-**Linux (bash):**
+#### B) Run an action (Linux)
 
 ```bash
 setup-aryan <action-name>
@@ -142,112 +267,13 @@ setup-aryan <action-name>
 setup-aryan <action-name> --force
 ```
 
-**Windows (PowerShell 5.1):**
+#### C) Check logs (Linux)
 
-```powershell
-setup-aryan <action-name>
-# force rerun (even if it previously succeeded)
-setup-aryan <action-name> -Force
-```
+- `/var/log/setup-aryan/`
 
-> Tip: you don’t need to remember action names — `setup-aryan list` is the source of truth, and you copy-paste from there.
+#### D) Check state-files (Linux)
 
-#### C) Get help/usage for the wrapper and for a specific action
-
-Different repos implement this slightly differently, but the contract in this repo is that scripts expose usage/help. Try these in order:
-
-**Linux:**
-
-```bash
-setup-aryan --help || setup-aryan help || true
-setup-aryan <action-name> --help || true
-```
-
-**Windows:**
-
-```powershell
-setup-aryan -Help
-setup-aryan <action-name> -Help
-```
-
-#### D) Check logs (what happened, and why)
-
-Logs are always written to the OS-specific logs directory:
-
-* **Linux logs:** `/var/log/setup-aryan/`
-* **Windows logs:** `D:\aryan-setup\logs\`
-
-Quick ways to inspect recent logs:
-
-**Linux:**
-
-```bash
-ls -lt /var/log/setup-aryan/ | head
-# then open/tail whichever log file is newest
-# (filename depends on action)
-```
-
-**Windows:**
-
-```powershell
-Get-ChildItem "D:\aryan-setup\logs" | Sort-Object LastWriteTime -Descending | Select-Object -First 10
-# then open the newest log file
-```
-
-If you’re using the log wrapper (staged under `bin/`):
-
-* Linux: `setup-aryan-log ...`
-* Windows: `setup-aryan-log ...`
-  (Use `setup-aryan-log --help` / `setup-aryan-log -Help` to see how it’s implemented in your repo.)
-
-#### E) Check state-files (did it succeed? did it skip?)
-
-State-files are the “truth record” for idempotency and re-runs:
-
-* **Linux state-files:** `/var/log/setup-aryan/state-files/`
-* **Windows state-files:** `D:\aryan-setup\state-files\`
-
-Common checks:
-
-**Linux:**
-
-```bash
-ls -lt /var/log/setup-aryan/state-files/ | head
-cat /var/log/setup-aryan/state-files/<action>.state
-```
-
-**Windows:**
-
-```powershell
-Get-ChildItem "D:\aryan-setup\state-files" | Sort-Object LastWriteTime -Descending | Select-Object -First 10
-Get-Content "D:\aryan-setup\state-files\<action>.state"
-```
-
-Interpretation rule:
-
-* `status=success` → action completed successfully.
-* `status=skipped` → it was already in the desired end-state and safely did nothing.
-* `status=failed` → check `log_path=` inside the state-file and open that log.
-
-#### F) Updating the repo scripts and restaging safely
-
-When you pull new changes from GitHub (or you edit actions locally), restage to refresh the staged framework:
-
-**Linux (from repo root):**
-
-```bash
-git pull
-sudo bash ./linux-setup/stage-aryan-setup.sh
-```
-
-**Windows (from repo root, elevated PowerShell):**
-
-```powershell
-git pull
-powershell -ExecutionPolicy Bypass -File .\windows-setup\stage-aryan-setup.ps1
-```
-
-This is designed to be safe to run repeatedly (idempotent staging).
+- `/var/log/setup-aryan/state-files/`
 
 ---
 
@@ -255,44 +281,44 @@ This is designed to be safe to run repeatedly (idempotent staging).
 
 ### Hardware + constraints
 
-* CPU: Intel Core Ultra 9 (275HX)
-* GPU: RTX 5080 16GB (Blackwell)
-* RAM: 32GB
-* Storage: 2×1TB NVMe Gen4
-* Secure Boot: **ON**
-* BIOS Graphics Mode: **Dynamic Graphics** (**default**)
+- CPU: Intel Core Ultra 9 (275HX)
+- GPU: RTX 5080 16GB (Blackwell)
+- RAM: 32GB
+- Storage: 2×1TB NVMe Gen4
+- Secure Boot: **ON**
+- BIOS Graphics Mode: **Dynamic Graphics** (**default**)
 
 ### Confirmed wiring constraint (critical)
 
-* **HDMI external output is physically routed to the NVIDIA dGPU.**
-* You verified: switching BIOS to UMA killed HDMI output in Windows.
-* Therefore:
+- **HDMI external output is physically routed to the NVIDIA dGPU.**
+- You verified: switching BIOS to UMA killed HDMI output in Windows.
+- Therefore:
 
-  * You **cannot** fully power-off the RTX while HDMI is in use.
-  * You **can** keep RTX **idle/on-demand** (best compromise), and only light it up for CUDA workloads.
+  - You **cannot** fully power-off the RTX while HDMI is in use.
+  - You **can** keep RTX **idle/on-demand** (best compromise), and only light it up for CUDA workloads.
 
 ### Storage architecture (authority rules)
 
 **Disk 0 (Windows)**
 
-* `C:` (200GB): Windows OS + core drivers only
-* `D:` (550GB): Windows dev authority (WSL + Docker + repos + tools + caches)
-* `E:` (100GB): OneDrive authority (personal/college sync)
-* `F:` (100GB, **NTFS**): Shared data lake (datasets/weights/checkpoints/exports only)
+- `C:` (200GB): Windows OS + core drivers only
+- `D:` (550GB): Windows dev authority (WSL + Docker + repos + tools + caches)
+- `E:` (100GB): OneDrive authority (personal/college sync)
+- `F:` (100GB, **NTFS**): Shared data lake (datasets/weights/checkpoints/exports only)
 
 **Disk 1 (Linux)**
 
-* EFI (1GB), `/boot` (1GB), swap (32GB), `/` (200GB), `/home` (~720GB)
+- EFI (1GB), `/boot` (1GB), swap (32GB), `/` (200GB), `/home` (~720GB)
 
 **Non-negotiable rule**
 
-* **Do not store dev environments or repos on `F:` (NTFS) from Linux.**
-* `F:` is for big, mostly-static data: datasets/weights/checkpoints/exports.
+- **Do not store dev environments or repos on `F:` (NTFS) from Linux.**
+- `F:` is for big, mostly-static data: datasets/weights/checkpoints/exports.
 
 All dev environments + repos live on:
 
-* Windows → `D:`
-* Linux → `/home`
+- Windows → `D:`
+- Linux → `/home`
 
 ---
 
@@ -301,11 +327,11 @@ All dev environments + repos live on:
 1. Boot BIOS (F2 / Fn+F2)
 2. Ensure:
 
-   * Boot Mode: **UEFI**
-   * TPM / Intel PTT: **Enabled**
-   * Virtualization (VT-x/VT-d): **Enabled** (WSL2/Docker)
-   * Secure Boot: **Enabled**
-   * Graphics: **Dynamic Graphics** (**keep this as default**)
+   - Boot Mode: **UEFI**
+   - TPM / Intel PTT: **Enabled**
+   - Virtualization (VT-x/VT-d): **Enabled** (WSL2/Docker)
+   - Secure Boot: **Enabled**
+   - Graphics: **Dynamic Graphics** (**keep this as default**)
 
 > **UMA mode**: great for battery **laptop-only**, but it kills CUDA and kills HDMI on your unit. Dynamic is your “always-works” default.
 
@@ -317,32 +343,36 @@ All dev environments + repos live on:
 
 **Required**
 
-* Windows 11 ISO (x64) — repair tools + reinstall option
-* Ubuntu 24.04.x Desktop ISO (amd64) — install + rescue environment
+- Windows 11 ISO (x64) — repair tools + reinstall option
+- Ubuntu 24.04.x Desktop ISO (amd64) — install + rescue environment
 
 **Optional (only if you really want imaging from USB)**
 
-* Rescuezilla ISO (recent versions focus on Secure Boot compatibility, but always test boot on your exact machine) ([Linuxiac][1])
+- Rescuezilla ISO (recent versions focus on Secure Boot compatibility, but always test boot on your exact machine) ([Linuxiac][1])
 
 **Also optional**
 
-* `TOOLS/Lenovo/BIOS/` folder to keep Lenovo BIOS updaters (not required for Ventoy)
+- `TOOLS/Lenovo/BIOS/` folder to keep Lenovo BIOS updaters (not required for Ventoy)
 
 ### 2.2 Create Ventoy with Secure Boot support (Windows)
 
 1. Download Ventoy (Windows ZIP), extract it
+
 2. Run `Ventoy2Disk.exe` as Administrator
+
 3. Select your USB drive (**triple-check it’s the USB**)
+
 4. Enable:
 
-   * `Option → Secure Boot Support` ✅
-   * (If available) `Option → Partition Style → GPT`
+   - `Option → Secure Boot Support` ✅
+   - (If available) `Option → Partition Style → GPT`
+
 5. Click **Install** (wipes the USB)
 
 Ventoy auto-creates:
 
-* a small EFI boot partition
-* a large data partition for ISOs
+- a small EFI boot partition
+- a large data partition for ISOs
 
 No manual partitioning needed.
 
@@ -366,13 +396,13 @@ TOOLS/Lenovo/BIOS/ (optional)
 3. Ventoy will prompt one-time Secure Boot enrollment → complete it ([ventoy.net][2])
 4. Test boot:
 
-   * Ubuntu ISO → reach “Try / Install”
-   * Windows ISO → reach Windows Setup
+   - Ubuntu ISO → reach “Try / Install”
+   - Windows ISO → reach Windows Setup
 
 **Rule for encryption stability**
 
-* If you later boot an unsigned ISO, you *might* need to temporarily disable Secure Boot, and Windows may ask for a recovery key when you come back.
-* If you want “Secure Boot always ON”, stick to signed ISOs (Windows/Ubuntu, and only Rescue ISOs you have personally tested on this machine).
+- If you later boot an unsigned ISO, you _might_ need to temporarily disable Secure Boot, and Windows may ask for a recovery key when you come back.
+- If you want “Secure Boot always ON”, stick to signed ISOs (Windows/Ubuntu, and only Rescue ISOs you have personally tested on this machine).
 
 ---
 
@@ -381,27 +411,29 @@ TOOLS/Lenovo/BIOS/ (optional)
 ### 3.1 One-time Windows hygiene
 
 1. Run Windows Update fully
+
 2. Install:
 
-   * Lenovo Vantage
-   * Legion Space
+   - Lenovo Vantage
+   - Legion Space
+
 3. Refresh rate sanity (battery):
 
-   * Internal: use 60/120Hz daily; 240Hz only when needed
-   * External HDMI: avoid max refresh unless you need it
+   - Internal: use 60/120Hz daily; 240Hz only when needed
+   - External HDMI: avoid max refresh unless you need it
 
 ### 3.2 Disable Fast Startup (mandatory for safe NTFS dual-boot)
 
 Fast Startup can leave NTFS “hibernated” and Linux will refuse to mount or corrupt it.
 
-* Control Panel → Power Options → “Choose what the power buttons do”
-* “Change settings that are currently unavailable”
-* Disable **Turn on fast startup**
+- Control Panel → Power Options → “Choose what the power buttons do”
+- “Change settings that are currently unavailable”
+- Disable **Turn on fast startup**
 
 ### 3.3 Windows encryption (Device Encryption on Home)
 
-* Settings → Privacy & security → Device encryption
-* If available, enable it and store the recovery key safely.
+- Settings → Privacy & security → Device encryption
+- If available, enable it and store the recovery key safely.
 
 > **PCR7 binding not supported**: that Windows status can stay “not supported” depending on firmware/boot state history.
 
@@ -413,20 +445,20 @@ The practical takeaway for this playbook: keep **Secure Boot ON** consistently o
 
 Create these folders:
 
-* `D:\dev\repos\`
-* `D:\dev\tools\`
-* `D:\dev\envs\`
-* `D:\dev\cache\`
-* `D:\apps\` (large GUI apps)
-* `D:\profiles\` (browser profiles)
+- `D:\dev\repos\`
+- `D:\dev\tools\`
+- `D:\dev\envs\`
+- `D:\dev\cache\`
+- `D:\apps\` (large GUI apps)
+- `D:\profiles\` (browser profiles)
 
 **Policy**
 
-* Git repos → `D:\dev\repos`
-* Toolchains → `D:\dev\tools`
-* Envs → `D:\dev\envs`
-* Caches → `D:\dev\cache`
-* Big GUI apps → `D:\apps`
+- Git repos → `D:\dev\repos`
+- Toolchains → `D:\dev\tools`
+- Envs → `D:\dev\envs`
+- Caches → `D:\dev\cache`
+- Big GUI apps → `D:\apps`
 
 ---
 
@@ -443,16 +475,16 @@ processors=6
 swap=4GB
 ```
 
-Apply:
+Apply (run in **CMD**):
 
-```powershell
+```bat
 wsl --shutdown
 ```
 
 Tuning:
 
-* Daily: 4–6GB
-* Heavy tasks: 8–10GB temporarily → then reduce again
+- Daily: 4–6GB
+- Heavy tasks: 8–10GB temporarily → then reduce again
 
 ---
 
@@ -462,183 +494,217 @@ Tuning:
 
 To configure resource limits globally for all WSL 2 distributions, the .wslconfig file must be placed in the Windows User Profile directory.
 Path: `%UserProfile%\.wslconfig` (e.g., `C:\Users\<YourName>\.wslconfig`)
-Application: Run `wsl --shutdown` in PowerShell to apply changes.
-###5.2.2 Relocating WSL Distribution to D: Drive
+Application: Run `wsl --shutdown` in **CMD** to apply changes.
+
+### 5.2.2 Relocating WSL Distribution to D: Drive
+
 To move the Ubuntu installation from the C: drive to the D: drive to manage storage effectively:
 
-```powershell
-# 1. Export the current distribution to a temporary tarball
+```bat
+REM 1. Export the current distribution to a temporary tarball
 wsl --export Ubuntu D:\WSL\backup\Ubuntu.tar
 
-# 2. Unregister (delete) the distribution from the C: drive
+REM 2. Unregister (delete) the distribution from the C: drive
 wsl --unregister Ubuntu
 
-# 3. Create the new directory and import the distribution to the D: drive
+REM 3. Create the new directory and import the distribution to the D: drive
 mkdir D:\WSL\Ubuntu
 wsl --import Ubuntu D:\WSL\Ubuntu D:\WSL\backup\Ubuntu.tar --version 2
 
-# 4. Set as default
+REM 4. Set as default
 wsl --set-default Ubuntu
-Use code with caution.
 ```
 
-To verify the registration path, the following PowerShell command queries the Windows Registry:
+To verify the registration path, query the registry from **CMD**:
 
-```powershell
-Get-ChildItem -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss" | 
-    ForEach-Object { Get-ItemProperty -Path $_.PSPath } | 
-    Select-Object DistributionName, BasePath
+```bat
+reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss" /s
 ```
+
+Look for the matching `DistributionName` and its `BasePath`.
 
 ### 5.2.3) Verifying Distribution and OS Version
 
 To inspect the internal Linux OS version (e.g., Ubuntu 22.04) without an interactive login:
 
-```powershell
-# Check WSL Architecture version
+```bat
+REM Check WSL Architecture version
 wsl -l -v
 
-# Check internal OS Release version
+REM Check internal OS Release version
 wsl -d Ubuntu cat /etc/os-release
 ```
 
 ### 5.2.4) Mounting Physical Dual-Boot NVMe Disks
 
-To access a physical Linux installation from a separate NVMe drive within WSL 2, we first identified the correct disk using partition GUIDs.
-Disk Analysis Output:
-
-```text
-DiskNumber PartitionNumber DriveLetter         Size Type     GptType
----------- --------------- -----------         ---- ----     -------
-         1               4            200000143360 Unknown  {0fc63daf-8483-4772-8e79-3d69d8477de4}
-         1               5            790078947328 Unknown  {0fc63daf-8483-4772-8e79-3d69d8477de4}
-         0               3           C 215591419904 Basic    {ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}
-```
-
-Identification: Disk 1 was identified as the Linux disk because of the GptType `{0fc63daf-...} (Linux Filesystem Data)`. Disk 0 was identified as Windows due to the `{ebd0a0a2-...} GUID (Microsoft Basic Data)`.
 Mounting the Partition:
 
-```powershell
-# Mount the Root partition from the second NVMe disk
+```bat
+REM Mount the Root partition from the second NVMe disk
 wsl --mount \\.\PHYSICALDRIVE1 --partition 4
 
-# Access via WSL terminal
-# Files located at: /mnt/wsl/PHYSICALDRIVE1p4
+REM Access via WSL terminal:
+REM Files located at: /mnt/wsl/PHYSICALDRIVE1p4
 
-# Unmount before rebooting into Physical Linux
+REM Unmount before rebooting into Physical Linux
 wsl --unmount \\.\PHYSICALDRIVE1
 ```
 
 ### 5.2.5) Post-Migration Cleanup
 
-After verifying that the D: drive installation is running and the data is accessible, the temporary backup was removed:
+After verifying that the D: drive installation is running and the data is accessible, remove the temporary backup:
 
-```powershell
-Remove-Item -Path D:\WSL\backup -Recurse -Force
+```bat
+rmdir /s /q D:\WSL\backup
 ```
 
 ### 5.3) Move Docker Desktop storage to D:
 
 Docker Desktop → Settings → Resources → Advanced
 
-* Disk image location: `D:\DockerDesktop\`
+- Disk image location: `D:\DockerDesktop\`
 
 Apply & restart.
 
 ---
 
-## 6) Windows Dev Setup (multi-Java, multi-Node, Miniconda, Android Studio, VS Code)
+## 6) Windows Dev Setup (Java-JDK 21, multi-Node, Miniconda)
 
-### 6.1 VS Code on Windows: Portable Mode (best for C: hygiene)
+---
 
-1. Download VS Code ZIP (not installer)
-2. Extract to: `D:\apps\VSCode\`
-3. Create: `D:\apps\VSCode\data\`
-4. Launch: `D:\apps\VSCode\Code.exe`
+### 🛠️ Manual Environment Restoration & Parity Guide (Windows 2025)
 
-Everything (extensions/settings) stays in `D:\apps\VSCode\data\`.
+This guide provides the systematic steps to manually restore the **Legion Pro 7i** environment, purging the artifacts of failed automation and enforcing absolute storage authority.
 
-### 6.2 Multi-Java on Windows (D: resident, version-safe)
+#### 🧹 Phase 1: The "Nuclear" Cleanup
 
-* Download JDK ZIP builds (Temurin recommended)
-* Extract:
+Before installing anything, we must remove the "clutter" (ghost folders, corrupted paths, and partial downloads) generated by previous automation attempts.
 
-  * `D:\dev\tools\jdk\jdk-21\`
-  * `D:\dev\tools\jdk\jdk-17\`
-  * `D:\dev\tools\jdk\jdk-8\` (only if required)
+#### 1. File System Purge
 
-PowerShell switch scripts: `D:\dev\tools\scripts\java21.ps1`
+Delete the following folders manually using File Explorer:
 
-```powershell
-$env:JAVA_HOME="D:\dev\tools\jdk\jdk-21"
-$env:Path="$env:JAVA_HOME\bin;$env:Path"
-java -version
-```
+- **Legacy Framework:** `C:\Tools\aryan-setup` (Delete the entire folder, if it exists).
 
-Use:
+- **The Ghost Folders:** Search for and delete any folder named `-Force`. Look specifically in:
 
-```powershell
-. D:\dev\tools\scripts\java21.ps1
-```
+- `C:\Windows\System32\-Force`
 
-### 6.3 Multi-Node on Windows
+- `D:\dev\tools\-Force`
 
-**Option A (native):** NVM for Windows
+- `C:\Users\aarya\AppData\Local\-Force`
 
-* Install NVM for Windows
-* Put NVM root on `D:\dev\tools\nvm\`
-* Set npm cache to `D:\dev\cache\npm\`
+- **The Temp Files:** Press `Win + R`, type `%temp%`, and delete all contents.
 
-**Option B (cleanest):** Node only inside WSL
+#### 2. Environment Variable Scrub
 
-* Use NVM inside WSL and keep Windows lighter
+1. Search for "Edit the system environment variables" in Windows.
+2. Under **User Variables**, delete: `JAVA_HOME`, `GRADLE_USER_HOME`, `UV_CACHE_DIR` (if incorrect).
+3. Under **User Path**, delete any entry containing `-Force` or `C:\Tools\aryan-setup\bin`.
+4. Under **System Variables**, check the **Path** and remove any `-Force` or invalid Java entries.
 
-### 6.4 Miniconda on Windows: everything on D:
+---
 
-Install Miniconda to:
+#### 🏗️ Phase 2: Systematic Manual Installation
 
-* `D:\dev\tools\miniconda3\`
+#### 1. Java (JDK 21)
 
-Then:
+**Goal:** Global binary authority on C: with high-growth build caches on D:.
+
+1. **Download:** Adoptium Temurin JDK 21 (MSI Installer) — [https://adoptium.net/temurin/releases/?version=21](https://adoptium.net/temurin/releases/?version=21)
+2. **Install:** Run the MSI. Set the install path to: `C:\Program Files\Java\jdk-21`.
+3. **Environment Variables:**
+
+- Create **System Variable**: `JAVA_HOME` = `C:\Program Files\Java\jdk-21`.
+- Edit **System Path**: Add `%JAVA_HOME%\bin`.
+
+4. **Cache Redirection:**
+
+- Create directory: `D:\dev\cache\.gradle`.
+- Create **User Variable**: `GRADLE_USER_HOME` = `D:\dev\cache\.gradle`.
+
+#### 2. Python (Conda & uv)
+
+**Goal:** Total isolation on D: drive to mirror Linux `/home` parity.
+
+1. **Miniconda:**
+
+- **Download:** [https://docs.anaconda.com/miniconda/](https://docs.anaconda.com/miniconda/)
+
+- **Install:** Choose "Just Me". Set path to: `D:\dev\tools\miniconda3`.
+
+- **Config:** Open CMD and run:
 
 ```bat
-conda config --set auto_activate_base false
-conda config --add envs_dirs D:\dev\envs\conda
-conda config --add pkgs_dirs D:\dev\cache\conda-pkgs
+conda config --set envs_dirs D:\dev\envs\conda
+conda config --set pkgs_dirs D:\dev\cache\conda\pkgs
 ```
 
-### 6.5 Android Studio on Windows: ZIP install + SDK/Gradle/AVD on D:
+2. **uv (Fast Package Manager):**
 
-* Extract Android Studio ZIP → `D:\apps\AndroidStudio\`
-* Launch `...\bin\studio64.exe`
+- **Download:** [https://github.com/astral-sh/uv/releases](https://github.com/astral-sh/uv/releases)
+- **Install:** Extract `uv.exe` to a stable tools location (example): `D:\dev\tools\bin\` and add that folder to PATH.
+- **Env Var:** Create **User Variable** `UV_CACHE_DIR` = `D:\dev\cache\uv`.
 
-During setup:
+#### 3. Node.js (NVM & pnpm)
 
-* Android SDK → `D:\dev\envs\Android\Sdk`
+**Goal:** Version management and global store managed entirely on D:.
 
-Set Windows user env vars:
+1. **NVM-Windows:**
 
-* `GRADLE_USER_HOME = D:\dev\cache\gradle`
-* `ANDROID_AVD_HOME = D:\dev\envs\Android\.android\avd`
+- **Download:** [https://github.com/coreybutler/nvm-windows/releases](https://github.com/coreybutler/nvm-windows/releases)
+- **Install (recommended paths):**
 
-### 6.6 Windows Chrome: profile + cache on D:
+  - NVM Home: `D:\dev\tools\nvm-windows`
+  - Node Symlink: `D:\dev\tools\nodejs`
 
-Create:
+2. **Node & pnpm:**
 
-* `D:\profiles\Chrome\UserData\`
-* `D:\profiles\Chrome\Cache\`
+- Open CMD: `nvm install lts` then `nvm use lts`.
+- Install pnpm: `npm install -g pnpm`.
 
-Shortcut target:
+3. **pnpm Redirection:**
 
-```text
-"C:\Program Files\Google\Chrome\Application\chrome.exe" --user-data-dir="D:\profiles\Chrome\UserData" --disk-cache-dir="D:\profiles\Chrome\Cache"
+- Run in terminal (optional):
+
+```bat
+pnpm config set store-dir D:\dev\cache\pnpm\store
+pnpm config set cache-dir D:\dev\cache\pnpm\cache
 ```
+
+---
+
+#### 🔍 Phase 3: Final Verification Registry
+
+To ensure the manual setup is correct, verify the following outputs:
+
+| Command                     | Expected Output Path                        |
+| --------------------------- | ------------------------------------------- |
+| `where.exe java`            | `C:\Program Files\Java\jdk-21\bin\java.exe` |
+| `where.exe conda`           | `D:\dev\tools\miniconda3\Scripts\conda.exe` |
+| `where.exe node`            | `D:\dev\tools\nodejs\node.exe`              |
+| `echo %UV_CACHE_DIR%`       | `D:\dev\cache\uv`                           |
+| `pnpm config get store-dir` | `D:\dev\cache\pnpm\store`                   |
+
+---
+
+#### 📂 Repository Alignment (updated)
+
+- **Do not use any `.ps1` automation on Windows anymore.**
+- Keep `windows-setup-legacy\` only as a history reference.
+- Use the batch audit tool as your primary audit tool:
+
+```bat
+validate-windows-dev
+```
+
+---
 
 **GPU policy on Windows (important)**
 
-* Settings → System → Display → Graphics
-* Chrome / VS Code / Discord / browsers → **Power saving (iGPU)**
-* Training tools (Python, CUDA apps) → **High performance (NVIDIA)**
+- Settings → System → Display → Graphics
+- Chrome / VS Code / Discord / browsers → **Power saving (iGPU)**
+- Training tools (Python, CUDA apps) → **High performance (NVIDIA)**
 
 ---
 
@@ -648,11 +714,11 @@ Shortcut target:
 
 Disk 1:
 
-* EFI 1GB FAT32 → mount `/boot/efi`
-* `/boot` 1GB ext4 → mount `/boot`
-* swap 32GB
-* `/` 200GB ext4
-* `/home` remaining ext4
+- EFI 1GB FAT32 → mount `/boot/efi`
+- `/boot` 1GB ext4 → mount `/boot`
+- swap 32GB
+- `/` 200GB ext4
+- `/home` remaining ext4
 
 ### 7.2 First boot essentials
 
@@ -715,8 +781,8 @@ sudo update-grub
 
 Now you’ll see:
 
-* Normal Ubuntu entry
-* **Advanced options for Ubuntu** → choose GA kernel or HWE kernel
+- Normal Ubuntu entry
+- **Advanced options for Ubuntu** → choose GA kernel or HWE kernel
 
 > This “HWE + GA fallback” is the safest laptop strategy when you’re running cutting-edge NVIDIA + hybrid graphics.
 
@@ -750,16 +816,19 @@ Reboot into the iGPU path (it should still boot).
    ```bash
    sudo ubuntu-drivers devices
    ```
+
 2. Install using ubuntu-drivers (this stays aligned with your system and updates):
 
    ```bash
    sudo ubuntu-drivers autoinstall
    ```
+
 3. **Secure Boot MOK enrollment**
 
-   * During install you may be asked to set a password.
-   * On reboot you must complete MOK enrollment (blue screen).
-   * Ubuntu’s Secure Boot chain uses shim + MokManager for this flow. ([Ubuntu Documentation][4])
+   - During install you may be asked to set a password.
+   - On reboot you must complete MOK enrollment (blue screen).
+   - Ubuntu’s Secure Boot chain uses shim + MokManager for this flow. ([Ubuntu Documentation][4])
+
 4. Verify:
 
    ```bash
@@ -845,9 +914,9 @@ sudo systemctl enable --now switcheroo-control
 
 ### 11.3 CUDA rule (how you intentionally use RTX)
 
-* Keep desktop on iGPU (`prime-select on-demand`)
-* Run training/inference on RTX using normal CUDA tools (PyTorch/TensorFlow will pick NVIDIA if driver is installed).
-* Do **not** “force dGPU” for browsers/editors.
+- Keep desktop on iGPU (`prime-select on-demand`)
+- Run training/inference on RTX using normal CUDA tools (PyTorch/TensorFlow will pick NVIDIA if driver is installed).
+- Do **not** “force dGPU” for browsers/editors.
 
 ---
 
@@ -855,9 +924,9 @@ sudo systemctl enable --now switcheroo-control
 
 ### Why your `$HOME` became literal in the `.desktop`
 
-* `.desktop` `Exec=` is **not** a shell script; it doesn’t reliably expand `$HOME`.
-* Editing system `.desktop` with `sudo` can also cause `/root` confusion.
-* Correct fix: create a **wrapper script** (runs as your user → `$HOME` expands) and a **user-level desktop entry**.
+- `.desktop` `Exec=` is **not** a shell script; it doesn’t reliably expand `$HOME`.
+- Editing system `.desktop` with `sudo` can also cause `/root` confusion.
+- Correct fix: create a **wrapper script** (runs as your user → `$HOME` expands) and a **user-level desktop entry**.
 
 ### 12.1 Create cache/profile directories (in /home)
 
@@ -924,9 +993,9 @@ update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 
 Now you can launch Chrome from:
 
-* Activities search
-* Dock favorites
-* App grid
+- Activities search
+- Dock favorites
+- App grid
 
 …and it will use your wrapper (iGPU preference + cache in /home).
 
@@ -1065,7 +1134,7 @@ conda config --add pkgs_dirs ~/dev/cache/conda-pkgs
 
 Extract Android Studio tar.gz to:
 
-* `~/dev/tools/android-studio/`
+- `~/dev/tools/android-studio/`
 
 Launch:
 
@@ -1095,10 +1164,10 @@ mkdir -p "$GRADLE_USER_HOME" "$ANDROID_AVD_HOME"
 
 Big offenders:
 
-* systemd journal logs
-* apt caches
-* `/var/log` growth
-* snap/flatpak (you’re removing snap)
+- systemd journal logs
+- apt caches
+- `/var/log` growth
+- snap/flatpak (you’re removing snap)
 
 ### 16.1 Cap systemd journal size + retention
 
@@ -1228,10 +1297,10 @@ sudo du -xh /var | sort -h | tail -n 30
 
 ### 17.1 Put AI assets on shared lake
 
-* datasets → `/mnt/shared/datasets`
-* weights → `/mnt/shared/weights`
-* checkpoints → `/mnt/shared/checkpoints`
-* exports → `/mnt/shared/exports`
+- datasets → `/mnt/shared/datasets`
+- weights → `/mnt/shared/weights`
+- checkpoints → `/mnt/shared/checkpoints`
+- exports → `/mnt/shared/exports`
 
 ### 17.2 Redirect ML caches to `/mnt/shared` (Linux)
 
@@ -1268,20 +1337,20 @@ powerprofilesctl set power-saver
 
 ### 18.2 Keep RTX “available but asleep” (best compromise)
 
-* Default: `prime-select on-demand` (iGPU desktop, RTX only when used)
-* If you need max battery **and** no HDMI: you can try Intel-only mode:
+- Default: `prime-select on-demand` (iGPU desktop, RTX only when used)
+- If you need max battery **and** no HDMI: you can try Intel-only mode:
 
-  * `sudo prime-select intel && reboot`
-  * But: CUDA won’t work in that mode, and HDMI on your unit likely won’t work.
+  - `sudo prime-select intel && reboot`
+  - But: CUDA won’t work in that mode, and HDMI on your unit likely won’t work.
 
 ### 18.3 Wayland note (RAM + stability)
 
 Ubuntu GNOME uses Wayland by default on many setups; RAM savings are not huge, but Wayland can reduce some compositor weirdness on hybrid systems.
 Your real RAM win is still:
 
-* limiting background apps
-* keeping WSL capped (Windows side)
-* keeping GUI apps on iGPU (Linux side via on-demand)
+- limiting background apps
+- keeping WSL capped (Windows side)
+- keeping GUI apps on iGPU (Linux side via on-demand)
 
 ---
 
@@ -1289,15 +1358,15 @@ Your real RAM win is still:
 
 Windows:
 
-* Lenovo Vantage + Legion Space remain your “official” control suite.
+- Lenovo Vantage + Legion Space remain your “official” control suite.
 
 Linux equivalents:
 
-* **LenovoLegionLinux (LLL)**: DKMS kernel module + daemon (`legiond`) + CLI/GUI tooling for Legion controls (fan/power features vary by model).
+- **LenovoLegionLinux (LLL)**: DKMS kernel module + daemon (`legiond`) + CLI/GUI tooling for Legion controls (fan/power features vary by model).
   It’s packaged on some distros and commonly installed from source on Ubuntu.
   ([Debian Packages][5])
 
-* **Keyboard RGB**: L5P-Keyboard-RGB supports many Legion generations on Linux/Windows (check your exact keyboard controller compatibility).
+- **Keyboard RGB**: L5P-Keyboard-RGB supports many Legion generations on Linux/Windows (check your exact keyboard controller compatibility).
   ([GitHub][6])
 
 ### 19.1 Install LenovoLegionLinux on Ubuntu (source-based approach)
@@ -1332,25 +1401,25 @@ Some desktop widgets/front-ends exist that talk to Legion features via the kerne
 
 ### 20.1 Cloud baseline
 
-* Code: GitHub (all repos)
-* Docs: OneDrive (E:)
-* Important exports/results:
+- Code: GitHub (all repos)
+- Docs: OneDrive (E:)
+- Important exports/results:
 
-  * sync selectively to OneDrive
-  * or store under `/mnt/shared/exports`
+  - sync selectively to OneDrive
+  - or store under `/mnt/shared/exports`
 
 ### 20.2 Windows recovery (fast)
 
-* Hasleo images occasionally (before major risky changes)
-* Ventoy Windows ISO always available for repair boot
+- Hasleo images occasionally (before major risky changes)
+- Ventoy Windows ISO always available for repair boot
 
 ### 20.3 Linux recovery (fast, no drama)
 
 Make Linux reproducible:
 
-* `~/dev/repos` is git
-* export env specs
-* keep a tiny “bootstrap” repo: `machine-setup`
+- `~/dev/repos` is git
+- export env specs
+- keep a tiny “bootstrap” repo: `machine-setup`
 
 Helpful exports:
 
@@ -1365,51 +1434,62 @@ pip freeze > ~/dev/repos//requirements.txt
 
 ### Windows checks
 
-* `C:` stays clean (OS only)
-* WSL memory stable:
+- `C:` stays clean (OS only)
 
-  * Task Manager → Memory stable at idle
-* WSL + Docker storage are on `D:`
-* Chrome profile on `D:\profiles\...`
-* Android SDK/AVD/Gradle caches on `D:`
-* Graphics settings:
+- WSL memory stable:
 
-  * GUI apps → iGPU
-  * training apps → NVIDIA
+  - Task Manager → Memory stable at idle
+
+- WSL + Docker storage are on `D:`
+
+- Chrome profile on `D:\profiles\...`
+
+- Android SDK/AVD/Gradle caches on `D:`
+
+- Graphics settings:
+
+  - GUI apps → iGPU
+  - training apps → NVIDIA
 
 ### Linux checks
 
-* `/` usage stays < 60%:
+- `/` usage stays < 60%:
 
   ```bash
   df -h /
   ```
-* both kernels exist:
+
+- both kernels exist:
 
   ```bash
   dpkg -l | grep -E 'linux-image|linux-headers' | grep generic
   ```
-* GRUB menu shows:
+
+- GRUB menu shows:
 
   ```bash
   grep -E 'GRUB_TIMEOUT_STYLE|GRUB_TIMEOUT' /etc/default/grub
   ```
-* shared mounted:
+
+- shared mounted:
 
   ```bash
   df -h | grep shared
   ```
-* NVIDIA works when needed:
+
+- NVIDIA works when needed:
 
   ```bash
   nvidia-smi
   ```
-* on-demand mode set:
+
+- on-demand mode set:
 
   ```bash
   sudo prime-select query
   ```
-* ML caches redirected:
+
+- ML caches redirected:
 
   ```bash
   echo $HF_HOME
@@ -1432,11 +1512,9 @@ pip freeze > ~/dev/repos//requirements.txt
 
 ## Notes you asked about (kept here so you don’t forget)
 
-* **HWE kernel showing 6.14.x** after `linux-generic-hwe-24.04` is normal in late 2025.
-* After kernel upgrades you don’t “reinstall build-essential”; you just ensure **headers exist** for DKMS modules.
-* HDMI is dGPU-wired → you can’t fully power off RTX while using HDMI, but you can keep GUI on iGPU and use RTX only for compute.
-
-
+- **HWE kernel showing 6.14.x** after `linux-generic-hwe-24.04` is normal in late 2025.
+- After kernel upgrades you don’t “reinstall build-essential”; you just ensure **headers exist** for DKMS modules.
+- HDMI is dGPU-wired → you can’t fully power off RTX while using HDMI, but you can keep GUI on iGPU and use RTX only for compute.
 
 [1]: https://linuxiac.com/rescuezilla-2-6-released-with-secure-boot-fixes/ "Rescuezilla 2.6 Released with Secure Boot Fixes and ..."
 [2]: https://ventoy.net/en/doc_secure.html "About Secure Boot in UEFI mode"

@@ -1,22 +1,33 @@
 @echo off
-setlocal EnableExtensions EnableDelayedExpansion
+setlocal EnableExtensions DisableDelayedExpansion
 
-rem ============================================================
-rem new-node-project.bat
-rem - Creates a minimal Node.js scaffold (no framework/templates)
-rem - Does NOT recommend create-vite/next/etc. User decides.
-rem - Flags:
-rem     --ai : adds README notes for AI patterns (service/onnx/tfjs)
-rem     --tf : adds README notes recommending TF via Python service or ONNX
-rem - Safety:
-rem     refuses to overwrite a non-empty project dir unless --force
+rem ==============================================================================
+rem new-node-project.bat  (Windows CMD)
+rem
+rem Minimal Node scaffold generator.
+rem
+rem Creates:
+rem   <project>\.gitignore
+rem   <project>\package.json
+rem   <project>\README.md
+rem   <project>\project_config.yaml
+rem   <project>\src\index.js
+rem   <project>\scripts\dev.cmd
+rem   <project>\scripts\run.cmd
+rem
+rem Defaults:
+rem   Projects root: D:\dev\projects
+rem
+rem Flags:
+rem   --ai / --tf are documentation-only notes (README + project_config.yaml).
+rem
+rem Overwrite:
+rem   - If project dir exists and is non-empty -> refuse unless --force
 rem
 rem Usage:
-rem   new-node-project.bat --name myapp
-rem   new-node-project.bat --name myapp --ai
-rem   new-node-project.bat --name myapp --tf
-rem   new-node-project.bat --name myapp --ai --tf
-rem ============================================================
+rem   new-node-project --name <project> [--projects-root <dir>] [--ai] [--tf] [--force]
+rem   new-node-project --help
+rem ==============================================================================
 
 set "NAME="
 set "PROJECTS_ROOT=D:\dev\projects"
@@ -24,87 +35,131 @@ set "AI=0"
 set "TF=0"
 set "FORCE=0"
 
+call :log INFO "Starting new-node-project"
+
+rem ---------------------------
+rem Parse args
+rem ---------------------------
 :parse
 if "%~1"=="" goto :parsed
+
 if /I "%~1"=="--help" goto :help
 if /I "%~1"=="-h" goto :help
 
 if /I "%~1"=="--name" (
+  if "%~2"=="" call :die "ERROR: --name requires a value"
   set "NAME=%~2"
-  shift /1
-  shift /1
+  shift
+  shift
   goto :parse
 )
 
 if /I "%~1"=="--projects-root" (
+  if "%~2"=="" call :die "ERROR: --projects-root requires a value"
   set "PROJECTS_ROOT=%~2"
-  shift /1
-  shift /1
+  shift
+  shift
   goto :parse
 )
 
 if /I "%~1"=="--ai" (
   set "AI=1"
-  shift /1
+  shift
   goto :parse
 )
 
 if /I "%~1"=="--tf" (
   set "TF=1"
-  shift /1
+  shift
   goto :parse
 )
 
 if /I "%~1"=="--force" (
   set "FORCE=1"
-  shift /1
+  shift
   goto :parse
 )
 
-echo [ERR] Unknown argument: %~1
-echo Use --help
-exit /b 2
+call :die "ERROR: Unknown argument: %~1 (use --help)"
 
 :parsed
-if "%NAME%"=="" (
-  echo [ERR] --name is required
-  exit /b 2
-)
+if "%NAME%"=="" call :die "ERROR: --name is required (use --help)"
 
-echo %NAME%| findstr /R /C:"^[A-Za-z0-9][A-Za-z0-9_-]*$" >nul
+rem ---------------------------
+rem Validate project name
+rem Only: letters/digits/dot/underscore/hyphen
+rem ---------------------------
+echo(%NAME%| findstr /R /X /C:"[A-Za-z0-9._-][A-Za-z0-9._-]*" >nul
 if errorlevel 1 (
-  echo [ERR] Invalid name "%NAME%".
-  exit /b 2
-)
-
-if not exist "D:\" (
-  echo [ERR] D:\ drive not found.
-  exit /b 1
+  call :die "ERROR: Invalid --name ""%NAME%"" (allowed: letters, digits, dot, underscore, hyphen)"
 )
 
 set "PROJECT_DIR=%PROJECTS_ROOT%\%NAME%"
 
-call :ensure_dir "%PROJECTS_ROOT%"
+call :log INFO "Name          = %NAME%"
+call :log INFO "Projects root  = %PROJECTS_ROOT%"
+call :log INFO "Project dir    = %PROJECT_DIR%"
+call :log INFO "Flags          = ai=%AI% tf=%TF% force=%FORCE%"
 
-if exist "%PROJECT_DIR%\" (
-  call :dir_nonempty "%PROJECT_DIR%"
-  if "!NONEMPTY!"=="1" if not "%FORCE%"=="1" (
-    echo [ERR] Project directory exists and is not empty:
-    echo       %PROJECT_DIR%
-    echo       Re-run with --force to overwrite scaffold files.
-    exit /b 3
-  )
-) else (
-  call :ensure_dir "%PROJECT_DIR%"
+rem ---------------------------
+rem Ensure projects root exists
+rem ---------------------------
+if not exist "%PROJECTS_ROOT%\" (
+  call :log INFO "Creating projects root: %PROJECTS_ROOT%"
+  mkdir "%PROJECTS_ROOT%" >nul 2>&1
+  if errorlevel 1 call :die "ERROR: Failed to create projects root: %PROJECTS_ROOT%"
 )
 
+rem ---------------------------
+rem Handle existing project dir
+rem ---------------------------
+if exist "%PROJECT_DIR%\" (
+  call :dir_nonempty "%PROJECT_DIR%"
+  if "%NONEMPTY%"=="1" (
+    if "%FORCE%"=="1" (
+      call :log WARN "Project dir exists and is non-empty; --force set, will overwrite generated files."
+    ) else (
+      call :die "ERROR: Project dir exists and is non-empty. Use --force to overwrite files."
+    )
+  ) else (
+    call :log INFO "Project dir exists but is empty; continuing."
+  )
+) else (
+  call :log INFO "Creating project dir: %PROJECT_DIR%"
+  mkdir "%PROJECT_DIR%" >nul 2>&1
+  if errorlevel 1 call :die "ERROR: Failed to create project dir: %PROJECT_DIR%"
+)
+
+rem ---------------------------
+rem Create subdirs
+rem ---------------------------
 call :ensure_dir "%PROJECT_DIR%\src"
 call :ensure_dir "%PROJECT_DIR%\scripts"
 
-where node >nul 2>nul || echo [WARN] node not found on PATH (scripts will fail until Node is installed)
-where npm  >nul 2>nul || echo [WARN] npm not found on PATH
-where pnpm >nul 2>nul || echo [INFO] pnpm not on PATH (OK). This scaffold does not enforce package manager.
+rem ---------------------------
+rem Write .gitignore
+rem ---------------------------
+call :log INFO "Writing .gitignore"
+> "%PROJECT_DIR%\.gitignore" (
+  echo node_modules/
+  echo dist/
+  echo build/
+  echo .env
+  echo .DS_Store
+  echo pnpm-lock.yaml
+  echo package-lock.json
+  echo yarn.lock
+  echo .pnpm-store/
+  echo npm-debug.log*
+  echo yarn-debug.log*
+)
+if errorlevel 1 call :die "ERROR: Failed writing .gitignore"
 
+rem ---------------------------
+rem Write package.json
+rem IMPORTANT: escape parentheses inside echo strings within (...) block
+rem ---------------------------
+call :log INFO "Writing package.json"
 > "%PROJECT_DIR%\package.json" (
   echo {
   echo   ^"name^": ^"%NAME%^",
@@ -114,73 +169,85 @@ where pnpm >nul 2>nul || echo [INFO] pnpm not on PATH (OK). This scaffold does n
   echo   ^"scripts^": {
   echo     ^"start^": ^"node src/index.js^",
   echo     ^"dev^": ^"node --watch src/index.js^",
-  echo     ^"lint^": ^"echo (add eslint later if needed)^",
-  echo     ^"test^": ^"echo (add tests later)^"
+  echo     ^"lint^": ^"echo ^(add eslint later if needed^)^",
+  echo     ^"test^": ^"echo ^(add tests later^)^"
   echo   }
   echo }
 )
+if errorlevel 1 call :die "ERROR: Failed writing package.json"
 
+rem ---------------------------
+rem Write src/index.js
+rem ---------------------------
+call :log INFO "Writing src\index.js"
 > "%PROJECT_DIR%\src\index.js" (
   echo console.log("Hello from %NAME%!");
   echo console.log("Node:", process.version);
 )
+if errorlevel 1 call :die "ERROR: Failed writing src\index.js"
 
+rem ---------------------------
+rem Write scripts/dev.cmd
+rem ---------------------------
+call :log INFO "Writing scripts\dev.cmd"
 > "%PROJECT_DIR%\scripts\dev.cmd" (
   echo @echo off
   echo setlocal EnableExtensions
-  echo cd /d ^"%PROJECT_DIR%^" ^|^| exit /b 1
-  echo where node ^>nul 2^>nul ^|^| ^(echo [ERR] node not found on PATH ^& exit /b 1^)
-  echo echo [INFO] Starting dev (node --watch)...
+  echo cd /d "%%~dp0\.."
+  echo echo [INFO] Starting dev ^(node --watch^)...
   echo node --watch src\index.js
+  echo exit /b %%errorlevel%%
 )
+if errorlevel 1 call :die "ERROR: Failed writing scripts\dev.cmd"
 
+rem ---------------------------
+rem Write scripts/run.cmd
+rem ---------------------------
+call :log INFO "Writing scripts\run.cmd"
 > "%PROJECT_DIR%\scripts\run.cmd" (
   echo @echo off
   echo setlocal EnableExtensions
-  echo cd /d ^"%PROJECT_DIR%^" ^|^| exit /b 1
-  echo where node ^>nul 2^>nul ^|^| ^(echo [ERR] node not found on PATH ^& exit /b 1^)
+  echo cd /d "%%~dp0\.."
   echo node src\index.js
+  echo exit /b %%errorlevel%%
 )
+if errorlevel 1 call :die "ERROR: Failed writing scripts\run.cmd"
 
+rem ---------------------------
+rem Write project_config.yaml
+rem ---------------------------
+call :log INFO "Writing project_config.yaml"
 > "%PROJECT_DIR%\project_config.yaml" (
-  echo name: %NAME%
-  echo language: node
-  echo paths:
-  echo   project_root: %PROJECT_DIR%
+  echo project:
+  echo   name: "%NAME%"
+  echo   type: "node"
+  echo   template_version: "1.0.0"
   echo flags:
   if "%AI%"=="1" (echo   ai_ml: true) else (echo   ai_ml: false)
   if "%TF%"=="1" (echo   tensorflow: true) else (echo   tensorflow: false)
-  echo toolchain:
-  echo   node: true
-  echo   package_manager: user-choice
+  echo paths:
+  echo   projects_root: "%PROJECTS_ROOT%"
 )
+if errorlevel 1 call :die "ERROR: Failed writing project_config.yaml"
 
-> "%PROJECT_DIR%\.gitignore" (
-  echo node_modules/
-  echo .pnpm-store/
-  echo npm-debug.log*
-  echo yarn-debug.log*
-  echo yarn-error.log*
-  echo .env
-  echo .vscode/
-  echo .idea/
-  echo dist/
-  echo build/
-)
-
+rem ---------------------------
+rem Write README.md
+rem ---------------------------
+call :log INFO "Writing README.md"
 > "%PROJECT_DIR%\README.md" (
   echo # %NAME%
   echo.
-  echo Minimal Node.js scaffold created by `new-node-project.bat`.
-  echo This intentionally avoids framework templates. Add your stack manually.
+  echo Minimal Node.js project generated by `new-node-project.bat`.
   echo.
   echo ## Quick start ^(CMD^)
-  echo Run in watch mode:
+  echo ```bat
+  echo cd /d "%PROJECT_DIR%"
+  echo node src\index.js
+  echo ```
+  echo.
+  echo ## Scripts
   echo ```bat
   echo scripts\dev.cmd
-  echo ```
-  echo Run once:
-  echo ```bat
   echo scripts\run.cmd
   echo ```
   echo.
@@ -189,57 +256,59 @@ where pnpm >nul 2>nul || echo [INFO] pnpm not on PATH (OK). This scaffold does n
   if "%TF%"=="1" (echo - TensorFlow: enabled) else (echo - TensorFlow: disabled)
   echo.
   if "%AI%"=="1" (
-    echo ## AI/ML notes (comments / suggestions)
-    echo - For Node, common approaches:
-    echo   - Call a Python inference service (FastAPI) from Node for GPU TensorFlow.
-    echo   - Use ONNX Runtime (node binding) after exporting models to ONNX.
-    echo   - Use tfjs (CPU) or tfjs-node (native) depending on your packaging needs.
-    echo - Keep model logic behind a small adapter module so you can swap implementations.
+    echo ## AI/ML notes ^(comments / suggestions^)
+    echo - Prefer calling a Python inference service ^(FastAPI^) from Node for GPU TensorFlow.
+    echo - Use ONNX Runtime after exporting models to ONNX.
+    echo - Use tfjs for lightweight browser inference if you truly need JS runtime.
     echo.
   )
   if "%TF%"=="1" (
-    echo ## TensorFlow in Node (recommended alternatives)
-    echo - If you specifically need TensorFlow GPU, the most reliable path is:
-    echo   1^) TensorFlow in Python (service) + Node calls it over HTTP.
-    echo   2^) Export model to ONNX + run in Node via ONNX Runtime.
+    echo ## TensorFlow in Node ^(recommended alternatives^)
+    echo 1^) TensorFlow in Python ^(service^) + Node calls it over HTTP.
+    echo 2^) Export to ONNX and use ONNX Runtime in Node.
+    echo 3^) Use tfjs for browser-side inference.
     echo.
-    echo ## UI on iGPU, compute on dGPU (Windows practical approach)
-    echo - If you build an Electron UI:
-    echo   - Set Electron app to **Power saving** (iGPU) in Windows Graphics settings.
-    echo   - Keep the Python TF service process as **High performance** (dGPU) if needed.
-    echo.
-    echo ## TODO comment
-    echo - If desktop/GUI shows up in GPU tools, it can be normal.
-    echo - Enforce per-app graphics preferences for iGPU-first GUI behavior.
   )
 )
+if errorlevel 1 call :die "ERROR: Failed writing README.md"
 
-echo [OK] Node project created:
-echo   %PROJECT_DIR%
+call :log INFO "SUCCESS: Node project created at: %PROJECT_DIR%"
 exit /b 0
 
+rem ==============================================================================
+rem Helpers
+rem ==============================================================================
+
 :help
-echo new-node-project.bat
+echo.
+echo new-node-project
 echo.
 echo Usage:
-echo   new-node-project.bat --name NAME [--projects-root PATH] [--ai] [--tf] [--force]
+echo   new-node-project --name ^<project^> [--projects-root ^<dir^>] [--ai] [--tf] [--force]
+echo.
 exit /b 0
 
 :ensure_dir
-if exist "%~1\" exit /b 0
-mkdir "%~1" >nul 2>nul
-if exist "%~1\" (
-  exit /b 0
-) else (
-  echo [ERR] Failed to create directory: %~1
-  exit /b 1
+if not exist "%~1\" (
+  mkdir "%~1" >nul 2>&1
+  if errorlevel 1 call :die "ERROR: Failed to create directory: %~1"
 )
+exit /b 0
 
 :dir_nonempty
 set "NONEMPTY=0"
-for /f "delims=" %%G in ('dir /b /a "%~1" 2^>nul') do (
+for /f "delims=" %%G in ('dir /b "%~1" 2^>nul') do (
   set "NONEMPTY=1"
-  goto :dir_nonempty_done
+  goto :done_nonempty
 )
-:dir_nonempty_done
+:done_nonempty
 exit /b 0
+
+:log
+rem %1=LEVEL, %2=MSG
+echo [%~1] %~2
+exit /b 0
+
+:die
+echo [%~1]
+exit /b 1

@@ -150,6 +150,18 @@ main() {
 
     log_line "Info" "Node: $(node -v 2>/dev/null || echo unknown)"
     log_line "Info" "pnpm: $(pnpm -v 2>/dev/null || echo unknown)"
+
+    log_line "Info" "Generating pnpm bash completions"
+    mkdir -p /tmp/completions
+    pnpm completion bash > /tmp/completions/pnpm
+    sudo mkdir -p /etc/bash_completion.d
+    sudo mv /tmp/completions/pnpm /etc/bash_completion.d/pnpm
+    sudo chmod 0644 /etc/bash_completion.d/pnpm
+
+    log_line "Info" "Generating npm bash completions"
+    npm completion > /tmp/completions/npm
+    sudo mv /tmp/completions/npm /etc/bash_completion.d/npm
+    sudo chmod 0644 /etc/bash_completion.d/npm
   fi
 
   finished_at="$(date --iso-8601=seconds)"

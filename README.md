@@ -247,6 +247,37 @@ This repo’s Linux `setup-aryan` actions must follow these invariants so you ca
 sudo bash ./linux-setup/stage-aryan-setup.sh
 ```
 
+### Fresh Setup Sequence (Linux Content-Addressable Storage)
+
+To replicate the **Vigyan** zero-bloat model (pnpm store, conda pkgs, uv cache) on your system:
+
+1. **Stage the repo:**
+   ```bash
+   sudo setup-aryan stage-linux-setup
+   ```
+
+2. **Setup the foundational scaffold:**
+   (Creates `/vigyan` tree, ACLs, and `/etc/profile.d/vigyan-env.sh`)
+   ```bash
+   setup-aryan setup-vigyan-scaffold-linux
+   ```
+   *Note: You should re-login or source `/etc/profile.d/vigyan-env.sh` after this step.*
+
+3. **Install toolchains:**
+   ```bash
+   setup-aryan install-node-toolchain-linux
+   # Default (OSS profile: conda-forge + nvidia)
+   setup-aryan install-python-toolchain-linux
+   # OR Full profile (requires ToS acceptance)
+   setup-aryan install-python-toolchain-linux --conda-profile full --accept-anaconda-tos
+   ```
+
+4. **Install AI Agents (CAS-native):**
+   (Installs Claude, Gemini, etc. into the shared content-addressable store)
+   ```bash
+   setup-aryan install-ca-agents-linux
+   ```
+
 _(Windows PowerShell staging is legacy and now lives in `windows-setup-legacy/` only.)_
 
 ### How to use the staged scripts (Linux only)

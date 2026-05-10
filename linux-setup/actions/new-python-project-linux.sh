@@ -188,25 +188,27 @@ if __name__ == "__main__":
     main()
 EOF
 
+  # scripts/dev.sh
   cat > "${project_dir}/scripts/dev.sh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 cd "\$(dirname "\$0")/.."
 
-# conda must be available in PATH for this shell
-if ! command -v conda >/dev/null 2>&1; then
-  echo "ERROR: conda not found in PATH" >&2
+# Ensure system-wide conda is used
+CONDA_BIN="/opt/miniconda3/bin/conda"
+if [[ ! -x "\${CONDA_BIN}" ]]; then
+  echo "ERROR: conda not found at \${CONDA_BIN}" >&2
   exit 1
 fi
 
 ENV_DIR="${env_dir}"
 if [[ ! -d "\${ENV_DIR}" ]]; then
   echo "Creating conda env at: \${ENV_DIR}"
-  conda create -y -p "\${ENV_DIR}" python=3.11
+  "\${CONDA_BIN}" create -y -p "\${ENV_DIR}" python=3.11
 fi
 
 # Activate by sourcing conda hook
-CONDA_BASE="\$(conda info --base)"
+CONDA_BASE="/opt/miniconda3"
 # shellcheck disable=SC1090
 source "\${CONDA_BASE}/etc/profile.d/conda.sh"
 conda activate "\${ENV_DIR}"
@@ -229,7 +231,7 @@ EOF
 set -euo pipefail
 cd "\$(dirname "\$0")/.."
 
-CONDA_BASE="\$(conda info --base)"
+CONDA_BASE="/opt/miniconda3"
 # shellcheck disable=SC1090
 source "\${CONDA_BASE}/etc/profile.d/conda.sh"
 conda activate "${env_dir}"
@@ -281,7 +283,7 @@ EOF
 set -euo pipefail
 cd "\$(dirname "\$0")/.."
 
-CONDA_BASE="\$(conda info --base)"
+CONDA_BASE="/opt/miniconda3"
 # shellcheck disable=SC1090
 source "\${CONDA_BASE}/etc/profile.d/conda.sh"
 conda activate "${env_dir}"

@@ -1,0 +1,220 @@
+#!/usr/bin/env bash
+# setup-vigyan-scaffold-linux.sh
+#
+# Prerequisites:
+# - Ubuntu 24.04+
+# - sudo privileges
+# - 'acl' package installed (for setfacl)
+#
+# Usage:
+#   setup-aryan setup-vigyan-scaffold-linux [--force] [--help]
+#
+# What it does:
+# - Creates /vigyan tree for shared toolchain caches (CAS).
+# - Creates 'vigyan-devcache' group for shared access.
+# - Applies POSIX ACLs to ensure shared r/w access within the group.
+# - Generates /etc/profile.d/vigyan-env.sh for global env vars.
+#
+# Logs:  /var/log/setup-aryan/setup-vigyan-scaffold-linux.log
+# State: /var/log/setup-aryan/state-files/setup-vigyan-scaffold-linux.state
+
+set -euo pipefail
+
+ACTION="setup-vigyan-scaffold-linux"
+VERSION="1.0.0"
+
+LOG_ROOT="/var/log/setup-aryan"
+STATE_ROOT="/var/log/setup-aryan/state-files"
+LOG_PATH="${LOG_ROOT}/${ACTION}.log"
+STATE_PATH="${STATE_ROOT}/${ACTION}.state"
+
+CACHE_GROUP="vigyan-devcache"
+VIGYAN_ROOT="/vigyan"
+VIGYAN_CACHE="${VIGYAN_ROOT}/dev-cache"
+VIGYAN_ENVS="${VIGYAN_ROOT}/dev-envs"
+VIGYAN_PNPM_STORE="${VIGYAN_ENVS}/pnpm-store"
+VIGYAN_USERS="${VIGYAN_ENVS}/users"
+
+FORCE="false"
+
+usage() {
+  cat <<'USAGE'
+setup-vigyan-scaffold-linux.sh
+
+Sets up the /vigyan directory structure and global environment variables.
+
+Usage:
+  setup-aryan setup-vigyan-scaffold-linux [--force]
+  setup-aryan setup-vigyan-scaffold-linux --help
+USAGE
+}
+
+ist_stamp() { TZ="Asia/Kolkata" date '+IST %d-%m-%Y %H:%M:%S'; }
+
+log_line() {
+  local level="$1"; shift
+  local msg="$*"
+  sudo mkdir -p "${LOG_ROOT}" "${STATE_ROOT}" >/dev/null 2>&1 || true
+  printf '%s %s %s\n' "$(ist_stamp)" "${level}" "${msg}" | sudo tee -a "${LOG_PATH}" >/dev/null
+}
+
+read_state_kv() {
+  local path="$1"
+  [[ -f "$path" ]] || return 1
+  # shellcheck disable=SC1090
+  source <(sudo sed -n 's/^\([a-zA-Z0-9_]\+\)=\(.*\)$/\1="\2"/p' "$path")
+}
+
+write_state_kv() {
+  local status="$1" rc="$2" started_at="$3" finished_at="$4" user="$5" host="$6" log_path="$7" version="$8"
+  local tmp="/tmp/${ACTION}.state.$$"
+  cat > "${tmp}" <<EOF
+action=${ACTION}
+status=${status}
+rc=${rc}
+started_at=${started_at}
+finished_at=${finished_at}
+user=${user}
+host=${host}
+log_path=${log_path}
+version=${version}
+EOF
+  sudo mv -f "${tmp}" "${STATE_PATH}"
+}
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force) FORCE="true"; shift ;;
+      -h|--help) usage; exit 0 ;;
+      *) echo "ERROR: Unknown argument: $1" >&2; usage; exit 1 ;;
+    esac
+  done
+}
+
+apply_shared_dir() {
+  local p="$1"
+  local owner="${2:-root}"
+  local mode="${3:-2775}"
+  log_line "Info" "Applying shared model to: ${p} (owner=${owner}, mode=${mode})"
+  sudo mkdir -p "${p}"
+  sudo chown "${owner}":"${CACHE_GROUP}" "${p}"
+  sudo chmod "${mode}" "${p}"
+  sudo setfacl -m "g:${CACHE_GROUP}:rwx" "${p}"
+  sudo setfacl -d -m "g:${CACHE_GROUP}:rwx" "${p}"
+  if [[ "${owner}" != "root" ]]; then
+    sudo setfacl -m "u:${owner}:rwx" "${p}"
+    sudo setfacl -d -m "u:${owner}:rwx" "${p}"
+  fi
+}
+
+main() {
+  parse_args "$@"
+  
+  local started_at finished_at user host rc status
+  started_at="$(date --iso-8601=seconds)"
+  user="$(id -un)"
+  host="$(hostname)"
+  rc=0
+  status="success"
+
+  log_line "Info" "Starting ${ACTION} FORCE=${FORCE}"
+
+  if [[ -f "${STATE_PATH}" && "${FORCE}" != "true" ]]; then
+    if read_state_kv "${STATE_PATH}" && [[ "${status:-}" == "success" ]]; then
+      log_line "Info" "Previous success recorded; skipping."
+      exit 0
+    fi
+  fi
+
+  # 1) Ensure Group
+  if ! getent group "${CACHE_GROUP}" >/dev/null 2>&1; then
+    log_line "Info" "Creating group: ${CACHE_GROUP}"
+    sudo groupadd "${CACHE_GROUP}"
+  fi
+
+  # 2) Ensure user is in group
+  if ! id -nG "${user}" | grep -qw "${CACHE_GROUP}"; then
+    log_line "Info" "Adding user ${user} to ${CACHE_GROUP}"
+    sudo usermod -aG "${CACHE_GROUP}" "${user}"
+  fi
+
+  # 3) Ensure ACL package
+  if ! command -v setfacl >/dev/null 2>&1; then
+    log_line "Info" "Installing 'acl' package..."
+    sudo apt-get update -qq && sudo apt-get install -y -qq acl >/dev/null
+  fi
+
+  # 4) Create structure
+  apply_shared_dir "${VIGYAN_ROOT}" "root" "2775"
+  apply_shared_dir "${VIGYAN_CACHE}" "root" "2775"
+  apply_shared_dir "${VIGYAN_CACHE}/conda" "root" "2775"
+  apply_shared_dir "${VIGYAN_CACHE}/conda/pkgs" "root" "2775"
+  apply_shared_dir "${VIGYAN_ENVS}" "root" "2775"
+  apply_shared_dir "${VIGYAN_PNPM_STORE}" "root" "2775"
+  apply_shared_dir "${VIGYAN_USERS}" "root" "2775"
+  
+  # Per-user directories
+  apply_shared_dir "${VIGYAN_USERS}/${user}" "${user}" "2770"
+  apply_shared_dir "${VIGYAN_USERS}/${user}/uv-cache" "${user}" "2770"
+  apply_shared_dir "${VIGYAN_USERS}/${user}/pnpm-home" "${user}" "2770"
+  apply_shared_dir "${VIGYAN_USERS}/${user}/corepack" "${user}" "2770"
+
+  # 5) Generate /etc/profile.d/vigyan-env.sh
+  log_line "Info" "Generating /etc/profile.d/vigyan-env.sh"
+  cat <<EOF | sudo tee /etc/profile.d/vigyan-env.sh >/dev/null
+# /etc/profile.d/vigyan-env.sh
+# Generated by setup-vigyan-scaffold-linux.sh
+
+export VIGYAN_ROOT="${VIGYAN_ROOT}"
+export VIGYAN_DEV_CACHE="${VIGYAN_CACHE}"
+export VIGYAN_DEV_ENVS="${VIGYAN_ENVS}"
+
+# Conda shared cache
+export CONDA_PKGS_DIRS="\${VIGYAN_DEV_CACHE}/conda/pkgs"
+
+# uv shared cache (per-user within vigyan tree)
+export UV_CACHE_DIR="\${VIGYAN_DEV_ENVS}/users/\${USER}/uv-cache"
+
+# pnpm CAS store (node-wide single store)
+export PNPM_STORE_PATH="${VIGYAN_PNPM_STORE}"
+
+# pnpm Home (for global bins)
+export PNPM_HOME="\${VIGYAN_DEV_ENVS}/users/\${USER}/pnpm-home"
+
+# Corepack cache
+export COREPACK_HOME="\${VIGYAN_DEV_ENVS}/users/\${USER}/corepack"
+export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+
+# Update PATH
+case ":\$PATH:" in
+  *":\${PNPM_HOME}/bin:"*) ;;
+  *) export PATH="\$PATH:\${PNPM_HOME}/bin" ;;
+esac
+
+
+# Ensure Miniconda is in PATH if installed system-wide
+if [[ -d "/opt/miniconda3/bin" ]]; then
+  case ":\$PATH:" in
+    *":/opt/miniconda3/bin:"*) ;;
+    *) export PATH="/opt/miniconda3/bin:\$PATH" ;;
+  esac
+fi
+
+# Ensure user local bin is in PATH
+if [[ -d "\${HOME}/.local/bin" ]]; then
+  case ":\$PATH:" in
+    *":\${HOME}/.local/bin:"*) ;;
+    *) export PATH="\${HOME}/.local/bin:\$PATH" ;;
+  esac
+fi
+EOF
+  sudo chmod 0644 /etc/profile.d/vigyan-env.sh
+
+  log_line "Info" "Scaffold complete. NOTE: Please re-login or source /etc/profile.d/vigyan-env.sh"
+
+  finished_at="$(date --iso-8601=seconds)"
+  write_state_kv "${status}" "${rc}" "${started_at}" "${finished_at}" "${user}" "${host}" "${LOG_PATH}" "${VERSION}"
+}
+
+main "$@"
